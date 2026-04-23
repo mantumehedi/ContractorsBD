@@ -101,6 +101,13 @@ body {
   line-height: 1.7;
 }
 
+/* English Stabilization (Prevents expansion on switch) */
+.en-text {
+  font-size: 0.9375rem; /* 15px - Slightly smaller to handle longer strings */
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+}
+
 /* Specific boost for small labels */
 .bn-text label {
   font-size: 14px !important;

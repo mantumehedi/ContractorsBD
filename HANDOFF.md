@@ -18,15 +18,15 @@ The application uses a high-vibrancy design system optimized for outdoor visibil
 ## 🛠️ Module Status
 - **Add Income:** ✅ Complete. Optimized category map (Bill, Advance, Refund, etc.).
 - **Add Expense:** ✅ Complete. Linked to project-specific vendors/units.
-- **Transaction Ledger:** 🏗️ Draft. Basic today/yesterday list implemented with vibrant color indicators.
-- **Analytics:** 📅 Planned. Project-wise profit/loss summary needed.
+- **Transaction Ledger:** ✅ Fully Functional Prototype. Real-time updates, bilingual search, and vibrant indicators implemented.
+- **Analytics:** 🏗️ Draft. Basic stats cards implemented; detailed project-wise breakdown planned.
 
 ## 🚀 Immediate Next Steps
 1.  **Supabase Backend:** 
-    - Replace `useState` mock lists with `useEffect` fetches from Supabase.
-    - Implement `UPSERT` logic for the bilingual dictionary to cache user-added vendors.
-2.  **Auth Integration:** Add simple login for contractor-specific project access.
-3.  **PDF Exports:** Implement voucher generation for printed records.
+    - Replace `transactions` state with Supabase `insert` and `fetch` logic.
+    - Persist the bilingual dictionary and cached vendors.
+2.  **Auth Integration:** Secure dashboard access.
+3.  **PDF Exports:** Voucher/Memo generation for field printing.
 
 ## ⚠️ Technical Notes
 - **Grid Symmetry:** The dashboard cards and action buttons are locked to `calc(50% - 6px)` with `gap-3` for perfect vertical alignment.
@@ -34,7 +34,9 @@ The application uses a high-vibrancy design system optimized for outdoor visibil
 
 ---
 *Last Session Summary: 2026-04-23*
-- Applied Matrix Green/Spiderman Red globally.
-- Doubled project name font size and removed truncation.
-- Tightened card/button padding for high-density layout.
-- Removed form separators for seamless UI.
+- Implemented **Reactive Transaction Ledger** (Live updates from forms).
+- Added **Bilingual Search** for transaction history.
+- Implemented **Sticky Action Bar** for Income/Expense buttons.
+- Refined **Validation Logic** (Ref No mandatory for bank/cheque, optional for cash).
+- Balanced **Bilingual Typography** to prevent card expansion in English mode.
+- Switched Bottom Nav to a solid background for premium readability.

@@ -3,11 +3,11 @@
 Premium, project-based financial management app tailored for Bangladesh construction contractors. Designed for maximum readability on-site and precision accounting in the office.
 
 ## 🚀 Key Features
-- **Vibrant Field Mode UI:** High-contrast design (Matrix Green/Spiderman Red) optimized for outdoor site conditions.
-- **Bilingual & Localized:** Seamless English/Bengali switching with specialized construction terminology (LGED, RHD, BWDB).
-- **Mega-Text Typography:** 25% larger Bengali text and massive amounts for zero-error data entry.
-- **Dual-Module Accounting:** Complete "Add Income" and "Add Expense" modules mirroring professional construction workflows.
-- **Responsive Symmetry:** Pixel-perfect grid alignment between project cards and action buttons.
+- **Vibrant Field Mode UI:** High-contrast design (Matrix Green/Spiderman Red) with **Sticky Action Bar** for site-speed entry.
+- **Reactive Ledger:** Live-updating transaction history with **Bilingual Search** (English/Bengali).
+- **Bilingual & Localized:** Seamless switching with **Optimized Typography** to prevent layout shifts.
+- **Precision Accounting:** Specialized "Add Income" and "Add Expense" forms with smart validation (Bank vs. Cash logic).
+- **Mobile-First Density:** Pixel-perfect symmetry with solid navigation and high-visibility amounts.
 
 ## 🛠️ Tech Stack
 - **Framework:** Next.js (App Router)

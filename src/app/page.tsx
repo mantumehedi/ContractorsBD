@@ -28,7 +28,8 @@ const MOCK_PROJECT_STATS = [
 ];
 
 
-const MOCK_TRANSACTIONS = [
+// Initial Data
+const INITIAL_TRANSACTIONS = [
   { id: 1, time: '11:30 AM', nature: 'Cement Purchase', amount: 95000, type: 'expense', project: 'Project Alpha' },
   { id: 2, time: '10:45 AM', nature: 'Client Advance', amount: 150000, type: 'income', project: 'Delta Tower' },
   { id: 3, time: '09:15 AM', nature: 'Labor Wages', amount: 70000, type: 'expense', project: 'Road Work' },
@@ -136,6 +137,10 @@ export default function Dashboard() {
 
   // Bilingual Logic
   const [lang, setLang] = useState<'bn' | 'en'>('bn');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Transaction State
+  const [transactions, setTransactions] = useState(INITIAL_TRANSACTIONS);
 
   const t = (key: string) => {
     const translations: { [key: string]: { bn: string, en: string } } = {
@@ -264,7 +269,16 @@ export default function Dashboard() {
     // Payment Methods
     'Cash': { bn: 'নগদ', en: 'Cash' },
     'Cheque': { bn: 'চেক', en: 'Cheque' },
-    'Bank Transfer': { bn: 'ব্যাংক ট্রান্সফার', en: 'Bank Transfer' }
+    'Bank Transfer': { bn: 'ব্যাংক ট্রান্সফার', en: 'Bank Transfer' },
+    
+    // Transaction Natures (Common)
+    'Cement Purchase': { bn: 'সিমেন্ট ক্রয়', en: 'Cement Purchase' },
+    'Client Advance': { bn: 'ক্লায়েন্ট অগ্রিম', en: 'Client Advance' },
+    'Labor Wages': { bn: 'লেবার বিল / মজুরি', en: 'Labor Wages' },
+    'Material Purchase': { bn: 'মালামাল ক্রয়', en: 'Material Purchase' },
+    'Project Alpha': { bn: 'প্রজেক্ট আলফা', en: 'Project Alpha' },
+    'Project Beta': { bn: 'প্রজেক্ট বিটা', en: 'Project Beta' },
+    'Road Work': { bn: 'রাস্তার কাজ', en: 'Road Work' }
   };
 
 
@@ -303,7 +317,7 @@ export default function Dashboard() {
 
 
   return (
-    <main className={`flex-1 overflow-y-auto pb-24 lg:pb-8 relative transition-all duration-300 ${lang === 'bn' ? 'bn-text' : ''}`}>
+    <main className={`pb-24 lg:pb-8 relative transition-all duration-300 ${lang === 'bn' ? 'bn-text' : 'en-text'}`}>
 
       {/* Header */}
       <header className="px-6 pt-8 pb-4 flex justify-between items-center">
@@ -407,29 +421,31 @@ export default function Dashboard() {
       </section>
 
 
-      {/* Action Buttons */}
-      <section className="px-6 mb-6 flex gap-3">
+      {/* Action Buttons (Sticky on Scroll) */}
+      <div className="sticky top-0 z-40 bg-[#1A1C1E] pt-4 pb-4 -mt-2 border-b border-white/5 shadow-2xl">
+        <section className="px-6 flex gap-3">
 
-        <button 
-          onClick={() => {
-            setErrors({});
-            setShowIncomeModal(true);
-          }}
-          className="flex-1 py-4 px-4 rounded-2xl bg-[#00FF41] hover:bg-[#00e63a] text-black font-black flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-green-900/40 uppercase tracking-tighter text-lg"
-        >
-          <Plus size={28} strokeWidth={4} /> {t('add_income')}
-        </button>
+          <button 
+            onClick={() => {
+              setErrors({});
+              setShowIncomeModal(true);
+            }}
+            className="flex-1 py-4 px-4 rounded-2xl bg-[#00FF41] hover:bg-[#00e63a] text-black font-black flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-green-900/40 uppercase tracking-tighter text-lg"
+          >
+            <Plus size={28} strokeWidth={4} /> {t('add_income')}
+          </button>
 
-        <button 
-          onClick={() => {
-            setErrors({});
-            setShowExpenseModal(true);
-          }}
-          className="flex-1 py-4 px-4 rounded-2xl bg-[#E23636] hover:bg-[#d12f2f] text-white font-black flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-red-900/40 uppercase tracking-tighter text-lg"
-        >
-          <Minus size={28} strokeWidth={4} /> {t('add_expense')}
-        </button>
-      </section>
+          <button 
+            onClick={() => {
+              setErrors({});
+              setShowExpenseModal(true);
+            }}
+            className="flex-1 py-4 px-4 rounded-2xl bg-[#E23636] hover:bg-[#d12f2f] text-white font-black flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-red-900/40 uppercase tracking-tighter text-lg"
+          >
+            <Minus size={28} strokeWidth={4} /> {t('add_expense')}
+          </button>
+        </section>
+      </div>
 
 
 
@@ -820,7 +836,20 @@ export default function Dashboard() {
                   <button 
                     onClick={() => {
                       if (validate()) {
+                        const newTx = {
+                          id: Date.now(),
+                          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                          nature: subCategory || mainCategory || 'Expense',
+                          amount: parseFloat(amount),
+                          type: 'expense',
+                          project: selectedProject
+                        };
+                        setTransactions([newTx, ...transactions]);
                         setShowExpenseModal(false);
+                        setAmount('');
+                        setSelectedProject('');
+                        setMainCategory('');
+                        setSubCategory('');
                         setErrors({});
                       }
                     }}
@@ -844,6 +873,8 @@ export default function Dashboard() {
           <input 
             type="text" 
             placeholder={t('search')}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-white/5 border border-white/10 rounded-2xl py-3 pl-12 pr-4 focus:outline-none focus:border-blue-500/50 transition-colors"
           />
         </div>
@@ -861,13 +892,19 @@ export default function Dashboard() {
 
         
         <div className="space-y-3">
-          {MOCK_TRANSACTIONS.map((tx) => (
+          {transactions.filter(tx => {
+            const query = searchQuery.toLowerCase();
+            return tx.nature.toLowerCase().includes(query) || 
+                   tx.project.toLowerCase().includes(query) ||
+                   getDisplayName(tx.nature).toLowerCase().includes(query) ||
+                   getDisplayName(tx.project).toLowerCase().includes(query);
+          }).map((tx) => (
             <div key={tx.id} className="md3-card-elevated flex items-center p-4 gap-4">
               <div className={`w-2 h-12 rounded-full ${tx.type === 'income' ? 'bg-[#00FF41]' : 'bg-[#E23636]'}`} />
               <div className="flex-1">
                 <div className="flex justify-between items-start">
                   <div>
-                    <div className="font-medium text-sm">{tx.nature}</div>
+                    <div className="font-medium text-sm">{getDisplayName(tx.nature)}</div>
                     <div className="text-xs opacity-50">{tx.time}</div>
                   </div>
                   <div className={`font-bold ${tx.type === 'income' ? 'text-[#00FF41]' : 'text-[#E23636]'}`}>
@@ -876,7 +913,7 @@ export default function Dashboard() {
                 </div>
                 <div className="mt-2">
                   <span className={`text-[10px] px-2 py-0.5 rounded-full border ${tx.type === 'income' ? 'border-[#00FF41]/30 text-[#00FF41] bg-[#00FF41]/5' : 'border-[#4169E1]/30 text-[#4169E1] bg-[#4169E1]/5'}`}>
-                    {tx.project}
+                    {getDisplayName(tx.project)}
                   </span>
                 </div>
 
@@ -887,7 +924,7 @@ export default function Dashboard() {
       </section>
 
       {/* Bottom Nav (Mobile Only) */}
-      <nav className="fixed bottom-0 left-0 right-0 glass lg:hidden flex justify-around py-4 border-t border-white/10">
+      <nav className="fixed bottom-0 left-0 right-0 bg-[#1A1C1E] lg:hidden flex justify-around py-4 border-t border-white/10 z-50">
         <button className="flex flex-col items-center gap-1 text-blue-400">
           <TrendingUp size={22} />
           <span className="text-[10px]">{t('dashboard')}</span>
@@ -953,7 +990,7 @@ export default function Dashboard() {
                         setIncomeAmount(e.target.value);
                         if (errors.incomeAmount) setErrors({...errors, incomeAmount: ''});
                       }}
-                      className={`w-full bg-transparent border-b-2 border-white/10 pb-2 pl-10 text-4xl font-bold text-white focus:outline-none focus:border-[#00FF41] transition-colors ${errors.incomeAmount ? 'border-red-500 animate-pulse' : ''}`}
+                      className={`w-full bg-transparent border-b-2 pb-2 pl-10 text-4xl font-bold text-white focus:outline-none focus:border-[#00FF41] transition-colors ${errors.incomeAmount ? 'border-red-500 shadow-[0_4px_10px_rgba(239,68,68,0.4)] animate-pulse' : 'border-white/10'}`}
                       autoFocus
                     />
                   </div>
@@ -1105,7 +1142,7 @@ export default function Dashboard() {
                       placeholder={lang === 'bn' ? 'চেক নং / টিটি নং' : 'Cheque / TT No'}
                       value={refNo}
                       onChange={(e) => setRefNo(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-2xl py-3 px-4 text-sm text-white focus:outline-none"
+                      className={`w-full bg-[#2D2F31] border rounded-2xl py-3 px-4 text-sm text-white focus:outline-none transition-colors ${errors.refNo ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-white/10'}`}
                     />
                   </div>
                 </div>
@@ -1133,11 +1170,26 @@ export default function Dashboard() {
                       if (!incomeCategory) newErrors.incomeCategory = 'error';
                       if (!incomeSubCategory) newErrors.incomeSubCategory = 'error';
                       if (!paymentMethod) newErrors.paymentMethod = 'error';
+                      if (paymentMethod && paymentMethod !== 'Cash' && !refNo) newErrors.refNo = 'error';
                       
                       setErrors(newErrors);
                       if (Object.keys(newErrors).length === 0) {
+                        const newTx = {
+                          id: Date.now(),
+                          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                          nature: incomeSubCategory || incomeCategory || 'Income',
+                          amount: parseFloat(incomeAmount),
+                          type: 'income',
+                          project: selectedProject
+                        };
+                        setTransactions([newTx, ...transactions]);
                         setShowIncomeModal(false);
-                        // Save logic here
+                        setIncomeAmount('');
+                        setSelectedProject('');
+                        setIncomeCategory('');
+                        setIncomeSubCategory('');
+                        setPaymentMethod('');
+                        setRefNo('');
                       }
                     }}
                     className="w-full bg-green-600 hover:bg-green-700 text-black font-bold py-4 rounded-2xl shadow-lg shadow-green-500/20 transition-all flex items-center justify-center gap-2"
