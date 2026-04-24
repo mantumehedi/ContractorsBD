@@ -4,24 +4,34 @@ Premium, project-based financial management app tailored for Bangladesh construc
 
 ## 🚀 Key Features
 - **Vibrant Field Mode UI:** High-contrast design (Matrix Green/Spiderman Red) with **Sticky Action Bar** for site-speed entry.
+- **Advanced RBAC System:** Context-specific roles (Contractor/Owner vs. Site Manager) with secure Row Level Security (RLS).
+- **Frictionless Invitations:** Invite Site Managers by email—even if they haven't signed up yet—via a deferred invitation system.
+- **Persistent Backend:** Full Supabase integration for projects, transactions, and vendors.
 - **Reactive Ledger:** Live-updating transaction history with **Bilingual Search** (English/Bengali).
-- **Bilingual & Localized:** Seamless switching with **Optimized Typography** to prevent layout shifts.
-- **Precision Accounting:** Specialized "Add Income" and "Add Expense" forms with smart validation (Bank vs. Cash logic).
-- **Mobile-First Density:** Pixel-perfect symmetry with solid navigation and high-visibility amounts.
+- **Bilingual & Localized:** Seamless switching with **Optimized Typography** and persistent translation caching.
+- **Mobile-First Density:** Pixel-perfect symmetry with dynamic stats cards showing recent project performance.
 
 ## 🛠️ Tech Stack
 - **Framework:** Next.js (App Router)
+- **Backend:** Supabase (@supabase/ssr)
+- **Auth:** Email OTP with Custom Gmail SMTP
 - **Styling:** Tailwind CSS / Custom MD3 Utility Classes
-- **State:** React Hooks (useState/AnimatePresence)
+- **State:** React Hooks & Supabase Client
 - **Icons:** Lucide React
 - **Animations:** Framer Motion
 
 ## 📈 Project Status & Roadmap
 For a detailed technical breakdown, see [HANDOFF.md](./HANDOFF.md).
 
+**Current Milestone:** ✅ Auth & RBAC Integration Complete
+**Next Up:** 🏗️ PDF Exports & Storage Integration
+
 ## ⚡ Quick Start
 1. `npm install`
-2. `npm run dev`
+2. Configure `.env.local` with your Supabase credentials.
+3. Configure Gmail SMTP in Supabase Auth settings for reliable OTP delivery.
+4. Run the SQL schema from the latest migration script (found in `HANDOFF.md` history).
+5. `npm run dev`
 
 ---
 *Created by Antigravity for ContractorsBD*

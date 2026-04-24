@@ -1,6 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { createClient } from '@/utils/supabase/client';
+const supabase = createClient();
 import { 
   Plus, 
   Minus, 
@@ -15,28 +17,23 @@ import {
   X,
   Camera,
   ChevronDown,
-  Check
+  LogOut,
+  Users,
+  FolderPlus,
+  Check,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useRouter } from 'next/navigation';
 
 
-// Mock Data
-const MOCK_PROJECT_STATS = [
-  { id: 1, name: 'Jamuna Bridge', income: 485500, expense: 310250, status: 'running' },
-  { id: 2, name: 'Delta Tower', income: 1200000, expense: 850000, status: 'running' },
-  { id: 3, name: 'Old Bridge', income: 200000, expense: 150000, status: 'completed' },
-];
 
 
-// Initial Data
-const INITIAL_TRANSACTIONS = [
-  { id: 1, time: '11:30 AM', nature: 'Cement Purchase', amount: 95000, type: 'expense', project: 'Project Alpha' },
-  { id: 2, time: '10:45 AM', nature: 'Client Advance', amount: 150000, type: 'income', project: 'Delta Tower' },
-  { id: 3, time: '09:15 AM', nature: 'Labor Wages', amount: 70000, type: 'expense', project: 'Road Work' },
-  { id: 4, time: '08:30 AM', nature: 'Material Purchase', amount: 45000, type: 'expense', project: 'Project Beta' },
-];
 
 export default function Dashboard() {
+  const [isLoading, setIsLoading] = useState(true);
+  const [dbProjects, setDbProjects] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [selectedProject, setSelectedProject] = useState('');
   const [amount, setAmount] = useState('');
@@ -139,8 +136,152 @@ export default function Dashboard() {
   const [lang, setLang] = useState<'bn' | 'en'>('bn');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Transaction State
-  const [transactions, setTransactions] = useState(INITIAL_TRANSACTIONS);
+  const [user, setUser] = useState<any>(null);
+  const [userRole, setUserRole] = useState<'contractor' | 'site_manager'>('contractor');
+  const router = useRouter();
+
+  // Fetch data on mount
+  useEffect(() => {
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        router.push('/login');
+      } else {
+        setUser(user);
+        
+        // Ensure profile exists and fetch role
+        let { data: profile, error } = await supabase
+          .from('profiles')
+          .select('global_role')
+          .eq('id', user.id)
+          .single();
+        
+        if (error && error.code === 'PGRST116') {
+          // Profile doesn't exist (for older users before the trigger was added)
+          const { data: newProfile } = await supabase
+            .from('profiles')
+            .insert({ id: user.id, email: user.email, global_role: 'contractor' })
+            .select()
+            .single();
+          profile = newProfile;
+        }
+
+        if (profile) setUserRole(profile.global_role as any);
+        fetchInitialData();
+      }
+    };
+    checkUser();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push('/login');
+  };
+
+  const [showTeamModal, setShowTeamModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteProject, setInviteProject] = useState('');
+  const [isInviting, setIsInviting] = useState(false);
+  const [showProjectModal, setShowProjectModal] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+
+  const fetchInitialData = async () => {
+    setIsLoading(true);
+    try {
+      // Fetch Projects (RLS handles filtering)
+      const { data: projectsData, error: projectsError } = await supabase
+        .from('projects')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (projectsError) throw projectsError;
+      setDbProjects(projectsData || []);
+
+      // Fetch Transactions (RLS handles filtering)
+      const { data: txData, error: txError } = await supabase
+        .from('transactions')
+        .select(`
+          *,
+          projects (name)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (txError) throw txError;
+      
+      const formattedTx = txData?.map(tx => ({
+        id: tx.id,
+        time: new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        nature: tx.nature,
+        amount: tx.amount,
+        type: tx.type,
+        project: tx.projects?.name || 'Unknown',
+        projectId: tx.project_id
+      }));
+      
+      setTransactions(formattedTx || []);
+
+      // Fetch Vendors/Payees
+      const { data: vendorData, error: vendorError } = await supabase
+        .from('vendors_payees')
+        .select('*, projects(name)');
+      
+      if (vendorError) throw vendorError;
+      
+      const vendorMap: { [key: string]: string[] } = {};
+      const payerList: string[] = ['LGED', 'RHD', 'BWDB', 'Private Owner'];
+      
+      vendorData?.forEach(v => {
+        const pName = v.projects?.name;
+        if (v.type === 'vendor' && pName) {
+          if (!vendorMap[pName]) vendorMap[pName] = [];
+          vendorMap[pName].push(v.name);
+        } else if (v.type === 'payer') {
+          if (!payerList.includes(v.name)) payerList.push(v.name);
+        }
+      });
+      setProjectVendors(vendorMap);
+      setPayers(payerList);
+
+      // Fetch Translations
+      const { data: transData, error: transError } = await supabase
+        .from('translations')
+        .select('*');
+      
+      if (transError) throw transError;
+      const transMap: Record<string, string> = {};
+      transData?.forEach(t => {
+        // Map based on current language or just store both?
+        // Let's store as key: translation based on context
+        // Actually, dynamicTranslations state stores [key]: bn_value if in BN mode? 
+        // No, getDisplayName checks dynamicTranslations[val] || val.
+        // Let's store [original_text]: Bengali_translation.
+        if (t.bn) transMap[t.key] = t.bn;
+      });
+      setDynamicTranslations(transMap);
+
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Calculate stats per project
+  const projectStats = useMemo(() => {
+    return dbProjects.map(project => {
+      const projectTx = transactions.filter(tx => tx.projectId === project.id);
+      const income = projectTx.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+      const expense = projectTx.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+      return {
+        ...project,
+        income,
+        expense,
+        profit: income - expense
+      };
+    }).filter(p => p.status === 'running')
+      .slice(0, 2);
+  }, [dbProjects, transactions]);
 
   const t = (key: string) => {
     const translations: { [key: string]: { bn: string, en: string } } = {
@@ -329,8 +470,29 @@ export default function Dashboard() {
           >
             {lang === 'bn' ? 'English' : 'বাংলা'}
           </button>
-          <button className="p-2 rounded-full hover:bg-white/5 transition-colors">
-            <MoreVertical size={20} />
+          
+          {userRole === 'contractor' && (
+            <>
+              <button 
+                onClick={() => setShowProjectModal(true)}
+                className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-green-400 hover:bg-green-500/10 transition-colors"
+              >
+                <FolderPlus size={20} />
+              </button>
+              <button 
+                onClick={() => setShowTeamModal(true)}
+                className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-blue-400 hover:bg-blue-500/10 transition-colors"
+              >
+                <Users size={20} />
+              </button>
+            </>
+          )}
+          
+          <button 
+            onClick={handleLogout}
+            className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-red-500 hover:bg-red-500/10 transition-colors"
+          >
+            <LogOut size={20} />
           </button>
         </div>
       </header>
@@ -346,24 +508,16 @@ export default function Dashboard() {
           </div>
 
           <ul className="space-y-1 text-sm font-bold">
-
-            <li className="flex flex-col">
-              <span className="opacity-90 text-base leading-tight text-black font-black break-words">{getDisplayName('Jamuna Bridge')}</span> 
-              <span className="text-black text-lg leading-none font-medium opacity-80">৳ 1.2M</span>
-            </li>
-            <li className="flex flex-col">
-              <span className="opacity-90 text-base leading-tight text-black font-black break-words">{getDisplayName('Delta Tower')}</span> 
-              <span className="text-black text-lg leading-none font-medium opacity-80">৳ 850k</span>
-            </li>
-
-
-
+            {projectStats.length > 0 ? projectStats.map((p) => (
+              <li key={p.id} className="flex flex-col">
+                <span className="opacity-90 text-base leading-tight text-black font-black break-words">{getDisplayName(p.name)}</span> 
+                <span className="text-black text-lg leading-none font-medium opacity-80">৳ {p.income.toLocaleString()}</span>
+              </li>
+            )) : (
+              <li className="text-black/40 text-xs italic">No data</li>
+            )}
           </ul>
         </div>
-
-
-
-
 
         {/* Expense Card */}
         <div className="flex-none w-[calc(50%-6px)] md:w-1/3 md3-card bg-expense-container snap-center p-2 border-0">
@@ -373,24 +527,16 @@ export default function Dashboard() {
           </div>
 
           <ul className="space-y-1 text-sm font-bold">
-
-            <li className="flex flex-col">
-              <span className="opacity-90 text-base leading-tight text-white font-black break-words">{getDisplayName('Jamuna Bridge')}</span> 
-              <span className="text-white text-lg leading-none font-medium opacity-80">৳ 120k</span>
-            </li>
-            <li className="flex flex-col">
-              <span className="opacity-90 text-base leading-tight text-white font-black break-words">{getDisplayName('Delta Tower')}</span> 
-              <span className="text-white text-lg leading-none font-medium opacity-80">৳ 95k</span>
-            </li>
-
-
-
+            {projectStats.length > 0 ? projectStats.map((p) => (
+              <li key={p.id} className="flex flex-col">
+                <span className="opacity-90 text-base leading-tight text-white font-black break-words">{getDisplayName(p.name)}</span> 
+                <span className="text-white text-lg leading-none font-medium opacity-80">৳ {p.expense.toLocaleString()}</span>
+              </li>
+            )) : (
+              <li className="text-white/40 text-xs italic">No data</li>
+            )}
           </ul>
         </div>
-
-
-
-
 
         {/* Profit Card */}
         <div className="flex-none w-[calc(50%-6px)] md:w-1/3 md3-card bg-profit-container snap-center p-2 border-0">
@@ -400,23 +546,16 @@ export default function Dashboard() {
           </div>
 
           <ul className="space-y-1 text-sm font-bold">
-
-            <li className="flex flex-col">
-              <span className="opacity-90 text-base leading-tight text-white font-black break-words">{getDisplayName('Jamuna Bridge')}</span> 
-              <span className="text-white text-lg leading-none font-medium opacity-80">+৳ 1.08M</span>
-            </li>
-            <li className="flex flex-col">
-              <span className="opacity-90 text-base leading-tight text-white font-black break-words">{getDisplayName('Delta Tower')}</span> 
-              <span className="text-white text-lg leading-none font-medium opacity-80">+৳ 755k</span>
-            </li>
-
-
-
+            {projectStats.length > 0 ? projectStats.map((p) => (
+              <li key={p.id} className="flex flex-col">
+                <span className="opacity-90 text-base leading-tight text-white font-black break-words">{getDisplayName(p.name)}</span> 
+                <span className="text-white text-lg leading-none font-medium opacity-80">{p.profit >= 0 ? '+' : ''}৳ {p.profit.toLocaleString()}</span>
+              </li>
+            )) : (
+              <li className="text-white/40 text-xs italic">No data</li>
+            )}
           </ul>
         </div>
-
-
-
 
       </section>
 
@@ -519,7 +658,7 @@ export default function Dashboard() {
                         className={`w-full bg-[#2D2F31] border rounded-2xl py-3 px-4 text-sm text-white appearance-none ${errors.project ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-white/10'}`}
                       >
                         <option value="">{t('project')}</option>
-                        {MOCK_PROJECT_STATS.filter(p => p.status === 'running').map((p) => (
+                        {dbProjects.filter(p => p.status === 'running').map((p) => (
                           <option key={p.id} value={p.name}>{getDisplayName(p.name)}</option>
                         ))}
                       </select>
@@ -572,8 +711,25 @@ export default function Dashboard() {
                           const targetLang = lang === 'bn' ? 'en' : 'bn';
                           const translated = await translateDynamic(customPayee.trim(), lang, targetLang);
                           
+                          // Persist Translation
+                          await supabase.from('translations').upsert({
+                            key: customPayee.trim(),
+                            [lang]: customPayee.trim(),
+                            [targetLang]: translated
+                          });
+
                           setDynamicTranslations(prev => ({...prev, [customPayee.trim()]: translated}));
                           
+                          // Persist Vendor
+                          const project = dbProjects.find(p => p.name === selectedProject);
+                          if (project) {
+                            await supabase.from('vendors_payees').insert({
+                              project_id: project.id,
+                              name: customPayee.trim(),
+                              type: 'vendor'
+                            });
+                          }
+
                           const newVendors = { ...projectVendors };
                           newVendors[selectedProject] = [...(newVendors[selectedProject] || []), customPayee.trim()];
                           setProjectVendors(newVendors);
@@ -834,17 +990,29 @@ export default function Dashboard() {
                     </motion.div>
                   )}
                   <button 
-                    onClick={() => {
+                    onClick={async () => {
                       if (validate()) {
-                        const newTx = {
-                          id: Date.now(),
-                          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                          nature: subCategory || mainCategory || 'Expense',
-                          amount: parseFloat(amount),
-                          type: 'expense',
-                          project: selectedProject
-                        };
-                        setTransactions([newTx, ...transactions]);
+                        const project = dbProjects.find(p => p.name === selectedProject);
+                        const { error } = await supabase
+                          .from('transactions')
+                          .insert([{
+                            project_id: project?.id,
+                            type: 'expense',
+                            nature: subCategory || mainCategory || 'Expense',
+                            amount: parseFloat(amount),
+                            category: mainCategory,
+                            subcategory: subCategory,
+                            payee_payer: selectedPayee,
+                            unit: selectedUnit,
+                            quantity: parseFloat(quantity)
+                          }]);
+
+                        if (error) {
+                          alert('Error saving: ' + error.message);
+                          return;
+                        }
+
+                        fetchInitialData();
                         setShowExpenseModal(false);
                         setAmount('');
                         setSelectedProject('');
@@ -1012,7 +1180,7 @@ export default function Dashboard() {
                         className={`w-full bg-[#2D2F31] border rounded-2xl py-3 px-4 text-sm text-white appearance-none ${errors.project ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-white/10'}`}
                       >
                         <option value="">{t('project')}</option>
-                        {MOCK_PROJECT_STATS.filter(p => p.status === 'running').map((p) => (
+                        {dbProjects.filter(p => p.status === 'running').map((p) => (
                           <option key={p.id} value={p.name}>{getDisplayName(p.name)}</option>
                         ))}
                       </select>
@@ -1060,7 +1228,26 @@ export default function Dashboard() {
                           setIsTranslating(true);
                           const targetLang = lang === 'bn' ? 'en' : 'bn';
                           const translated = await translateDynamic(customPayer.trim(), lang, targetLang);
+                          
+                          // Persist Translation
+                          await supabase.from('translations').upsert({
+                            key: customPayer.trim(),
+                            [lang]: customPayer.trim(),
+                            [targetLang]: translated
+                          });
+
                           setDynamicTranslations(prev => ({...prev, [customPayer.trim()]: translated}));
+                          
+                          // Persist Payer
+                          const project = dbProjects.find(p => p.name === selectedProject);
+                          if (project) {
+                            await supabase.from('vendors_payees').insert({
+                              project_id: project.id,
+                              name: customPayer.trim(),
+                              type: 'payer'
+                            });
+                          }
+
                           setPayers([...payers, customPayer.trim()]);
                           setSelectedPayer(customPayer.trim());
                           setCustomPayer('');
@@ -1162,7 +1349,7 @@ export default function Dashboard() {
                 <div className="pt-6">
 
                   <button 
-                    onClick={() => {
+                    onClick={async () => {
                       const newErrors: Record<string, string> = {};
                       if (!incomeAmount) newErrors.incomeAmount = 'error';
                       if (!selectedProject) newErrors.project = 'error';
@@ -1174,15 +1361,27 @@ export default function Dashboard() {
                       
                       setErrors(newErrors);
                       if (Object.keys(newErrors).length === 0) {
-                        const newTx = {
-                          id: Date.now(),
-                          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                          nature: incomeSubCategory || incomeCategory || 'Income',
-                          amount: parseFloat(incomeAmount),
-                          type: 'income',
-                          project: selectedProject
-                        };
-                        setTransactions([newTx, ...transactions]);
+                        const project = dbProjects.find(p => p.name === selectedProject);
+                        const { error } = await supabase
+                          .from('transactions')
+                          .insert([{
+                            project_id: project?.id,
+                            type: 'income',
+                            nature: incomeSubCategory || incomeCategory || 'Income',
+                            amount: parseFloat(incomeAmount),
+                            category: incomeCategory,
+                            subcategory: incomeSubCategory,
+                            payee_payer: selectedPayer,
+                            payment_method: paymentMethod,
+                            ref_no: refNo
+                          }]);
+
+                        if (error) {
+                          alert('Error saving: ' + error.message);
+                          return;
+                        }
+
+                        fetchInitialData();
                         setShowIncomeModal(false);
                         setIncomeAmount('');
                         setSelectedProject('');
@@ -1198,6 +1397,201 @@ export default function Dashboard() {
                     {t('save')}
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+      {/* Team Management Modal */}
+      <AnimatePresence>
+        {showTeamModal && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowTeamModal(false)}
+              className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[80]"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="fixed inset-x-6 top-20 bg-[#1A1C1E] border border-white/10 rounded-[32px] p-8 z-[90] shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-8">
+                <h2 className="text-xl font-bold text-white flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center text-blue-400">
+                    <Users size={20} />
+                  </div>
+                  {t('team_management')}
+                </h2>
+                <button onClick={() => setShowTeamModal(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/40">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">Site Manager Email</label>
+                  <input 
+                    type="email"
+                    placeholder="manager@email.com"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-4 text-white focus:outline-none focus:border-blue-600 transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">Assign to Project</label>
+                  <select 
+                    value={inviteProject}
+                    onChange={(e) => setInviteProject(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-4 text-white focus:outline-none focus:border-blue-600 appearance-none"
+                  >
+                    <option value="">Select Project</option>
+                    {dbProjects.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <button 
+                  onClick={async () => {
+                    if (!inviteEmail || !inviteProject) return;
+                    setIsInviting(true);
+                    
+                    const normalizedEmail = inviteEmail.trim().toLowerCase();
+
+                    // 1. Check if user already exists in profiles
+                    const { data: profile } = await supabase
+                      .from('profiles')
+                      .select('id')
+                      .eq('email', normalizedEmail)
+                      .single();
+
+                    if (profile) {
+                      // Case A: User exists -> Add directly to project_members
+                      const { error: memberError } = await supabase
+                        .from('project_members')
+                        .insert({
+                          project_id: inviteProject,
+                          user_id: profile.id,
+                          role: 'site_manager'
+                        });
+
+                      if (memberError) {
+                        if (memberError.code === '23505') alert('This user is already a manager for this project.');
+                        else alert(memberError.message);
+                      } else {
+                        alert('Site Manager assigned successfully!');
+                        setShowTeamModal(false);
+                        setInviteEmail('');
+                        setInviteProject('');
+                      }
+                    } else {
+                      // Case B: User doesn't exist yet -> Add to invitations
+                      const { error: inviteError } = await supabase
+                        .from('invitations')
+                        .insert({
+                          project_id: inviteProject,
+                          email: normalizedEmail,
+                          role: 'site_manager',
+                          invited_by: user.id
+                        });
+
+                      if (inviteError) {
+                        if (inviteError.code === '23505') alert('An invitation is already pending for this email.');
+                        else alert(inviteError.message);
+                      } else {
+                        alert('Invitation sent! Once they log in with this email, they will automatically see the project.');
+                        setShowTeamModal(false);
+                        setInviteEmail('');
+                        setInviteProject('');
+                      }
+                    }
+                    setIsInviting(false);
+                  }}
+                  disabled={isInviting}
+                  className="w-full bg-blue-600 py-5 rounded-2xl text-white font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-50"
+                >
+                  {isInviting ? <Loader2 className="animate-spin" size={24} /> : 'Assign Site Manager'}
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+      {/* Add Project Modal */}
+      <AnimatePresence>
+        {showProjectModal && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowProjectModal(false)}
+              className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[80]"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="fixed inset-x-6 top-40 bg-[#1A1C1E] border border-white/10 rounded-[32px] p-8 z-[90] shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-8">
+                <h2 className="text-xl font-bold text-white flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-green-600/20 flex items-center justify-center text-green-400">
+                    <FolderPlus size={20} />
+                  </div>
+                  New Project
+                </h2>
+                <button onClick={() => setShowProjectModal(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/40">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">Project Name (Bilingual supported)</label>
+                  <input 
+                    type="text"
+                    placeholder="e.g. Padma Bridge / পদ্মা সেতু"
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-4 text-white focus:outline-none focus:border-green-500 transition-all"
+                  />
+                </div>
+
+                <button 
+                  onClick={async () => {
+                    if (!newProjectName.trim() || !user) return;
+                    setIsCreatingProject(true);
+                    
+                    const { error } = await supabase
+                      .from('projects')
+                      .insert({
+                        name: newProjectName.trim(),
+                        owner_id: user.id,
+                        status: 'running'
+                      });
+
+                    if (error) {
+                      alert(error.message);
+                    } else {
+                      alert('Project created successfully!');
+                      setShowProjectModal(false);
+                      setNewProjectName('');
+                      fetchInitialData();
+                    }
+                    setIsCreatingProject(false);
+                  }}
+                  disabled={isCreatingProject}
+                  className="w-full bg-[#00FF41] py-5 rounded-2xl text-black font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-50"
+                >
+                  {isCreatingProject ? <Loader2 className="animate-spin" size={24} /> : 'Create Project'}
+                </button>
               </div>
             </motion.div>
           </>

@@ -12,31 +12,32 @@ The application uses a high-vibrancy design system optimized for outdoor visibil
 
 ## 🇧🇩 Bilingual Implementation
 - **Static terms:** Handled via `DATA_TRANSLATIONS` local dictionary.
-- **Dynamic terms:** (New Vendors/Payees) uses the **MyMemory Translation API** with a fallback mechanism.
+- **Dynamic terms:** (New Vendors/Payees) uses the **MyMemory Translation API** with a persistence layer in Supabase.
 - **Consistency:** All document upload labels ("Attach Voucher / Memo") and placeholders are strictly bilingual.
 
 ## 🛠️ Module Status
-- **Add Income:** ✅ Complete. Optimized category map (Bill, Advance, Refund, etc.).
-- **Add Expense:** ✅ Complete. Linked to project-specific vendors/units.
-- **Transaction Ledger:** ✅ Fully Functional Prototype. Real-time updates, bilingual search, and vibrant indicators implemented.
-- **Analytics:** 🏗️ Draft. Basic stats cards implemented; detailed project-wise breakdown planned.
+- **Database (Supabase):** ✅ Complete. 
+    - Schema includes `projects`, `transactions`, `vendors_payees`, `translations`, `profiles`, `project_members`, and `invitations`.
+    - RLS enabled with Advanced RBAC policies (Owner vs. Member).
+- **Auth & RBAC:** ✅ Complete.
+    - Email OTP login/signup implemented with Custom Gmail SMTP.
+    - Role system: Every user is a **Contractor** by default (can own projects) but can be a **Site Manager** for others.
+    - **Deferred Invitations:** Contractors can invite new users by email; access is granted automatically upon their first login.
+- **Analytics:** 🏗️ Draft. Stats cards dynamically show the **top 2 most recent running projects** with accurate P&L calculation.
 
 ## 🚀 Immediate Next Steps
-1.  **Supabase Backend:** 
-    - Replace `transactions` state with Supabase `insert` and `fetch` logic.
-    - Persist the bilingual dictionary and cached vendors.
-2.  **Auth Integration:** Secure dashboard access.
-3.  **PDF Exports:** Voucher/Memo generation for field printing.
+1.  **PDF Exports:** Voucher/Memo generation (PDF) for field printing.
+2.  **Storage Integration:** Implement voucher image uploads to Supabase Storage.
+3.  **Detailed Analytics:** Multi-project comparison charts and time-series expense tracking.
 
 ## ⚠️ Technical Notes
-- **Grid Symmetry:** The dashboard cards and action buttons are locked to `calc(50% - 6px)` with `gap-3` for perfect vertical alignment.
-- **Text Wrapping:** `break-words` is applied to project names in cards to prevent overflow.
+- **Deferred Invitation Trigger**: The `handle_new_user` Postgres function handles the transition from `invitations` to `project_members` upon signup.
+- **RLS Automation**: The dashboard relies on Supabase RLS to filter projects and transactions automatically—no client-side filtering is required for security.
+- **SMTP Configuration**: Gmail App Passwords must be used for reliable OTP delivery via `smtp.gmail.com`.
 
 ---
-*Last Session Summary: 2026-04-23*
-- Implemented **Reactive Transaction Ledger** (Live updates from forms).
-- Added **Bilingual Search** for transaction history.
-- Implemented **Sticky Action Bar** for Income/Expense buttons.
-- Refined **Validation Logic** (Ref No mandatory for bank/cheque, optional for cash).
-- Balanced **Bilingual Typography** to prevent card expansion in English mode.
-- Switched Bottom Nav to a solid background for premium readability.
+*Last Session Summary: 2026-04-24*
+- **Auth Integration:** Successfully implemented Email OTP and secure callback routing.
+- **RBAC & RLS:** Established a context-specific role system protected by backend policies.
+- **Deferred Invitation System:** Created a robust flow for inviting new team members.
+- **SMTP Optimization:** Configured custom Gmail SMTP to bypass Supabase's default email limits.
