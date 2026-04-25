@@ -9,11 +9,16 @@ Premium, project-based financial management app tailored for Bangladesh construc
 - **Persistent Backend:** Full Supabase integration for projects, transactions, and vendors.
 - **Reactive Ledger:** Live-updating transaction history with **Bilingual Search** (English/Bengali).
 - **Bilingual & Localized:** Seamless switching with **Optimized Typography** and persistent translation caching.
-- **Mobile-First Density:** Pixel-perfect symmetry with dynamic stats cards showing recent project performance.
+- **Project-Wise Analytics:** Animated spending breakdown charts and project efficiency comparisons in the **Reports** tab.
+- **PDF Export System:** Professional A4 voucher/memo generation with embedded voucher images.
+- **Voucher Accountability:** Real-time photo uploads and management for every ledger entry via Supabase Storage.
+- **Full CRUD Ledger:** Edit and Delete existing transactions with real-time stats updates.
 
 ## 🛠️ Tech Stack
 - **Framework:** Next.js (App Router)
 - **Backend:** Supabase (@supabase/ssr)
+- **Storage:** Supabase Storage (Voucher Bucket)
+- **PDF Engine:** jsPDF + html2canvas
 - **Auth:** Email OTP with Custom Gmail SMTP
 - **Styling:** Tailwind CSS / Custom MD3 Utility Classes
 - **State:** React Hooks & Supabase Client
@@ -23,8 +28,9 @@ Premium, project-based financial management app tailored for Bangladesh construc
 ## 📈 Project Status & Roadmap
 For a detailed technical breakdown, see [HANDOFF.md](./HANDOFF.md).
 
-**Current Milestone:** ✅ Auth & RBAC Integration Complete
-**Next Up:** 🏗️ PDF Exports & Storage Integration
+**Current Milestone:** ✅ Accounting CRUD, PDF Export & Storage Complete
+**Next Up:** 🏗️ Reports UI/UX Refinement & Project Archiving
+
 
 ## ⚡ Quick Start
 1. `npm install`

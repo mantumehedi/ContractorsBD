@@ -1,7 +1,7 @@
 import { type NextRequest } from 'next/server'
-import { createClient } from '@/utils/supabase/middleware'
+import { createClient } from '@/utils/supabase/proxy'
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   return await createClient(request)
 }
 
@@ -17,3 +17,4 @@ export const config = {
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
+

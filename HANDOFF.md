@@ -23,21 +23,24 @@ The application uses a high-vibrancy design system optimized for outdoor visibil
     - Email OTP login/signup implemented with Custom Gmail SMTP.
     - Role system: Every user is a **Contractor** by default (can own projects) but can be a **Site Manager** for others.
     - **Deferred Invitations:** Contractors can invite new users by email; access is granted automatically upon their first login.
-- **Analytics:** 🏗️ Draft. Stats cards dynamically show the **top 2 most recent running projects** with accurate P&L calculation.
+- **Analytics:** ✅ Implemented. Project-wise performance summary and category breakdown live in the "Reports" tab.
+- **PDF & Exports:** ✅ Complete. Professional voucher generation (A4) with image embedding.
+- **Storage:** ✅ Complete. Image uploads for vouchers supported in ledger entries.
 
 ## 🚀 Immediate Next Steps
-1.  **PDF Exports:** Voucher/Memo generation (PDF) for field printing.
-2.  **Storage Integration:** Implement voucher image uploads to Supabase Storage.
-3.  **Detailed Analytics:** Multi-project comparison charts and time-series expense tracking.
+1.  **Reports UI/UX Refinement:** Redesign the reports interface for better data density and visual flow (User requested).
+2.  **Project Archiving:** Implement status transitions for completed projects.
+3.  **Audit Logs:** Track who edited or deleted specific transactions for accountability.
 
 ## ⚠️ Technical Notes
-- **Deferred Invitation Trigger**: The `handle_new_user` Postgres function handles the transition from `invitations` to `project_members` upon signup.
-- **RLS Automation**: The dashboard relies on Supabase RLS to filter projects and transactions automatically—no client-side filtering is required for security.
+- **PDF Rendering:** `html2canvas` is sensitive to CSS `lab()` and `oklch()` colors in Tailwind 4. Use static HEX codes for PDF templates.
+- **Cross-Origin Images:** Supabase Storage bucket MUST be public for `html2canvas` to render voucher photos in PDFs.
 - **SMTP Configuration**: Gmail App Passwords must be used for reliable OTP delivery via `smtp.gmail.com`.
 
 ---
-*Last Session Summary: 2026-04-24*
-- **Auth Integration:** Successfully implemented Email OTP and secure callback routing.
-- **RBAC & RLS:** Established a context-specific role system protected by backend policies.
-- **Deferred Invitation System:** Created a robust flow for inviting new team members.
-- **SMTP Optimization:** Configured custom Gmail SMTP to bypass Supabase's default email limits.
+*Last Session Summary: 2026-04-25*
+- **PDF Export:** Integrated `jspdf` and `html2canvas` for field-ready voucher downloads.
+- **Storage Integration:** Enabled real-time photo uploads for ledger accountability.
+- **Project Analytics:** Built a project-wise drill-down report system with animated charts.
+- **CRUD Operations:** Completed Edit/Delete flow for all transaction types.
+- **Mobile Navigation:** Activated bottom-tab view switching between Dashboard and Reports.

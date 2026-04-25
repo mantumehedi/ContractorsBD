@@ -3,6 +3,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@/utils/supabase/client';
 const supabase = createClient();
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
+
 import { 
   Plus, 
   Minus, 
@@ -21,8 +24,22 @@ import {
   Users,
   FolderPlus,
   Check,
-  Loader2
+  Loader2,
+  Image,
+  Trash2,
+  UploadCloud,
+  Edit2,
+  FileText,
+  Download,
+  LayoutDashboard,
+  BarChart3,
+  PieChart,
+  Wallet
 } from 'lucide-react';
+
+
+
+
 import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 
@@ -135,6 +152,21 @@ export default function Dashboard() {
   // Bilingual Logic
   const [lang, setLang] = useState<'bn' | 'en'>('bn');
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
+  const [showTransactionDetails, setShowTransactionDetails] = useState(false);
+  const [description, setDescription] = useState('');
+  const [voucherFile, setVoucherFile] = useState<File | null>(null);
+  const [voucherPreview, setVoucherPreview] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'projects' | 'settings'>('dashboard');
+  const [selectedReportProjectId, setSelectedReportProjectId] = useState<string | null>(null);
+
+
+
+
+
 
   const [user, setUser] = useState<any>(null);
   const [userRole, setUserRole] = useState<'contractor' | 'site_manager'>('contractor');
@@ -186,7 +218,74 @@ export default function Dashboard() {
   const [newProjectName, setNewProjectName] = useState('');
   const [isCreatingProject, setIsCreatingProject] = useState(false);
 
+  const uploadVoucher = async (file: File) => {
+    if (!user) return null;
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Math.random()}.${fileExt}`;
+    const filePath = `vouchers/${user.id}/${Date.now()}_${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('vouchers')
+      .upload(filePath, file);
+
+    if (uploadError) {
+      console.error('Upload error:', uploadError);
+      return null;
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('vouchers')
+      .getPublicUrl(filePath);
+
+    return publicUrl;
+  };
+
+
+  const generatePDF = async (tx: any) => {
+
+    const element = document.getElementById('voucher-export-container');
+    if (!element) return;
+
+    try {
+      setIsLoading(true);
+      // Wait for images to load if any
+      const images = element.getElementsByTagName('img');
+      await Promise.all(Array.from(images).map(img => {
+        if (img.complete) return Promise.resolve();
+        return new Promise(resolve => { img.onload = resolve; img.onerror = resolve; });
+      }));
+
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#FFFFFF'
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Voucher_${tx.id.slice(0, 8)}.pdf`);
+    } catch (error) {
+      console.error('PDF Generation Error:', error);
+      alert('Failed to generate PDF');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+
   const fetchInitialData = async () => {
+
+
     setIsLoading(true);
     try {
       // Fetch Projects (RLS handles filtering)
@@ -210,16 +309,14 @@ export default function Dashboard() {
       if (txError) throw txError;
       
       const formattedTx = txData?.map(tx => ({
-        id: tx.id,
+        ...tx,
         time: new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        nature: tx.nature,
-        amount: tx.amount,
-        type: tx.type,
         project: tx.projects?.name || 'Unknown',
         projectId: tx.project_id
       }));
       
       setTransactions(formattedTx || []);
+
 
       // Fetch Vendors/Payees
       const { data: vendorData, error: vendorError } = await supabase
@@ -267,6 +364,54 @@ export default function Dashboard() {
     }
   };
 
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm(t('confirm_delete'))) return;
+    
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      alert('Error deleting: ' + error.message);
+    } else {
+      setShowTransactionDetails(false);
+      fetchInitialData();
+    }
+  };
+
+  const handleEditClick = (tx: any) => {
+    setIsEditMode(true);
+    setEditingId(tx.id);
+    setShowTransactionDetails(false);
+
+    if (tx.type === 'expense') {
+      setAmount(tx.amount.toString());
+      setSelectedProject(tx.project);
+      setMainCategory(tx.category);
+      setSubCategory(tx.subcategory);
+      setSelectedPayee(tx.payee_payer);
+      setQuantity(tx.quantity?.toString() || '');
+      setSelectedUnit(tx.unit || '');
+      setDescription(tx.description || '');
+      setVoucherPreview(tx.voucher_url || null);
+      setShowExpenseModal(true);
+    } else {
+      setIncomeAmount(tx.amount.toString());
+      setSelectedProject(tx.project);
+      setIncomeCategory(tx.category);
+      setIncomeSubCategory(tx.subcategory);
+      setSelectedPayer(tx.payee_payer);
+      setPaymentMethod(tx.payment_method || '');
+      setRefNo(tx.ref_no || '');
+      setDescription(tx.description || '');
+      setVoucherPreview(tx.voucher_url || null);
+      setShowIncomeModal(true);
+    }
+  };
+
+
   // Calculate stats per project
   const projectStats = useMemo(() => {
     return dbProjects.map(project => {
@@ -282,6 +427,202 @@ export default function Dashboard() {
     }).filter(p => p.status === 'running')
       .slice(0, 2);
   }, [dbProjects, transactions]);
+
+
+  // Reports Data Aggregation
+  const reportsData = useMemo(() => {
+    const categoryBreakdown: Record<string, number> = {};
+    let totalIncome = 0;
+    let totalExpense = 0;
+
+    transactions.forEach(tx => {
+      if (tx.type === 'income') {
+        totalIncome += tx.amount;
+      } else {
+        totalExpense += tx.amount;
+        const cat = tx.category || 'Others';
+        categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + tx.amount;
+      }
+    });
+
+    const sortedCategories = Object.entries(categoryBreakdown)
+      .sort(([, a], [, b]) => b - a)
+      .map(([name, value]) => ({ name, value }));
+
+    return { 
+      totalIncome, 
+      totalExpense, 
+      netProfit: totalIncome - totalExpense, 
+      categories: sortedCategories 
+    };
+  }, [transactions]);
+
+
+  const renderReports = () => {
+    // Aggregation for selected project
+    const project = dbProjects.find(p => p.id === selectedReportProjectId);
+    const projectTx = transactions.filter(tx => tx.project_id === selectedReportProjectId);
+    
+    const income = projectTx.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+    const expense = projectTx.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+    
+    const projectCategoryBreakdown: Record<string, number> = {};
+    projectTx.filter(tx => tx.type === 'expense').forEach(tx => {
+      const cat = tx.category || 'Others';
+      projectCategoryBreakdown[cat] = (projectCategoryBreakdown[cat] || 0) + tx.amount;
+    });
+
+    const projectCategories = Object.entries(projectCategoryBreakdown)
+      .sort(([, a], [, b]) => b - a)
+      .map(([name, value]) => ({ name, value }));
+
+    return (
+      <div className="px-6 pb-12 animate-in fade-in duration-500">
+         {/* Project Selector Header */}
+         <div className="mb-8">
+            <label className="text-[10px] uppercase font-bold tracking-[0.3em] text-white/40 mb-3 block">
+              {lang === 'bn' ? 'প্রজেক্ট সিলেক্ট করুন' : 'Select Project for Report'}
+            </label>
+            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+              <button 
+                onClick={() => setSelectedReportProjectId(null)}
+                className={`flex-none px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all ${!selectedReportProjectId ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'bg-white/5 text-white/40'}`}
+              >
+                {lang === 'bn' ? 'সব প্রজেক্ট' : 'All Projects'}
+              </button>
+              {dbProjects.map(p => (
+                <button 
+                  key={p.id}
+                  onClick={() => setSelectedReportProjectId(p.id)}
+                  className={`flex-none px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all ${selectedReportProjectId === p.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'bg-white/5 text-white/40'}`}
+                >
+                  {getDisplayName(p.name)}
+                </button>
+              ))}
+            </div>
+         </div>
+
+         {!selectedReportProjectId ? (
+           <div className="grid grid-cols-1 gap-6">
+             <div className="mb-2">
+               <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-white/40 px-1">
+                 {lang === 'bn' ? 'প্রজেক্ট ভিত্তিক রিপোর্ট' : 'Project Wise Summary'}
+               </h3>
+             </div>
+             {projectStats.map(p => (
+               <div key={p.id} className="md3-card p-6 border border-white/5 bg-gradient-to-br from-white/5 to-transparent relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[50px] -mr-16 -mt-16 group-hover:bg-blue-500/10 transition-all" />
+                  
+                  <div className="flex justify-between items-start mb-6 relative z-10">
+                    <div>
+                      <h4 className="text-xl font-black text-white">{getDisplayName(p.name)}</h4>
+                      <p className="text-[10px] text-white/30 uppercase font-bold mt-1 tracking-widest">Performance Matrix</p>
+                    </div>
+                    <span className={`text-xs font-black px-3 py-1 rounded-full ${p.profit >= 0 ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                      {Math.round((p.profit / (p.income || 1)) * 100)}% Margin
+                    </span>
+                  </div>
+                  
+                  <div className="grid grid-cols-3 gap-3 mb-6 relative z-10">
+                    <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                      <p className="text-[8px] text-white/30 uppercase font-bold mb-1">{t('income')}</p>
+                      <p className="text-sm font-black text-[#00FF41]">৳{p.income.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                      <p className="text-[8px] text-white/30 uppercase font-bold mb-1">{t('expense')}</p>
+                      <p className="text-sm font-black text-[#E23636]">৳{p.expense.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                      <p className="text-[8px] text-white/30 uppercase font-bold mb-1">{t('profit')}</p>
+                      <p className="text-sm font-black text-blue-400">৳{p.profit.toLocaleString()}</p>
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={() => setSelectedReportProjectId(p.id)}
+                    className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-xs font-bold uppercase tracking-widest text-white/60 transition-all flex items-center justify-center gap-2 border border-white/5"
+                  >
+                    {lang === 'bn' ? 'বিস্তারিত ক্যাটাগরি দেখুন' : 'Category Breakdown'} <ArrowUpRight size={16} />
+                  </button>
+               </div>
+             ))}
+           </div>
+         ) : (
+           <div className="animate-in slide-in-from-right duration-300">
+              {/* Project Specific Summary */}
+              <div className="md3-card-elevated p-8 mb-10 text-center bg-gradient-to-br from-[#2D2F31] to-[#1A1C1E] border border-white/5 relative overflow-hidden">
+                <div className="absolute inset-0 bg-blue-600/5 pointer-events-none" />
+                <label className="text-[10px] uppercase font-bold tracking-[0.3em] text-white/40 mb-3 block relative z-10">
+                  {getDisplayName(project?.name)} — {t('profit')}
+                </label>
+                <h2 className={`text-5xl font-black mb-2 relative z-10 ${income - expense >= 0 ? 'text-[#00FF41]' : 'text-[#E23636]'}`}>
+                  ৳ {(income - expense).toLocaleString()}
+                </h2>
+                <div className="flex justify-center gap-8 mt-8 relative z-10">
+                  <div>
+                    <p className="text-[10px] text-white/30 uppercase font-bold mb-1 tracking-widest">{t('income')}</p>
+                    <p className="text-[#00FF41] text-lg font-black">৳ {income.toLocaleString()}</p>
+                  </div>
+                  <div className="w-px h-10 bg-white/10" />
+                  <div>
+                    <p className="text-[10px] text-white/30 uppercase font-bold mb-1 tracking-widest">{t('expense')}</p>
+                    <p className="text-[#E23636] text-lg font-black">৳ {expense.toLocaleString()}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Category Breakdown for Project */}
+              <div className="mb-12">
+                <h3 className="text-lg font-bold text-white mb-8 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center text-blue-400">
+                    <PieChart size={20} />
+                  </div>
+                  {lang === 'bn' ? 'ব্যয়ের খাতসমূহ' : 'Spending Breakdown'}
+                </h3>
+                <div className="space-y-7">
+                  {projectCategories.length > 0 ? projectCategories.map((cat, idx) => (
+                    <div key={cat.name} className="relative">
+                      <div className="flex justify-between items-end mb-3 px-1">
+                        <span className="text-sm font-bold text-white/80 tracking-wide">{getDisplayName(cat.name)}</span>
+                        <div className="text-right">
+                          <span className="text-xs font-black text-white block">৳ {cat.value.toLocaleString()}</span>
+                          <span className="text-[8px] font-bold text-white/30 uppercase">{Math.round((cat.value / (expense || 1)) * 100)}%</span>
+                        </div>
+                      </div>
+                      <div className="h-3.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(cat.value / (expense || 1)) * 100}%` }}
+                          transition={{ duration: 1, delay: idx * 0.1, ease: "easeOut" }}
+                          className={`h-full rounded-full ${
+                            idx % 3 === 0 ? 'bg-blue-500' : idx % 3 === 1 ? 'bg-purple-500' : 'bg-emerald-500'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="bg-white/2 border border-dashed border-white/10 rounded-3xl p-12 text-center">
+                      <PieChart size={40} className="mx-auto mb-4 text-white/10" />
+                      <p className="text-white/20 text-xs italic">No expenses recorded for this project.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setSelectedReportProjectId(null)}
+                className="w-full py-5 bg-white/5 hover:bg-white/10 text-white/40 rounded-3xl text-[10px] font-bold uppercase tracking-[0.3em] active:scale-[0.98] transition-all border border-white/5"
+              >
+                ← {lang === 'bn' ? 'প্রজেক্ট লিস্টে ফিরে যান' : 'Back to All Projects'}
+              </button>
+           </div>
+         )}
+      </div>
+    );
+  };
+
+
+
 
   const t = (key: string) => {
     const translations: { [key: string]: { bn: string, en: string } } = {
@@ -319,8 +660,29 @@ export default function Dashboard() {
 
       projects: { bn: 'প্রজেক্টসমূহ', en: 'Projects' },
       reports: { bn: 'রিপোর্ট', en: 'Reports' },
-      settings: { bn: 'সেটিংস', en: 'Settings' }
+      settings: { bn: 'সেটিংস', en: 'Settings' },
+      
+      // Transaction Details
+      tx_details: { bn: 'লেনদেনের বিস্তারিত', en: 'Transaction Details' },
+      date_time: { bn: 'তারিখ ও সময়', en: 'Date & Time' },
+      category: { bn: 'ক্যাটাগরি', en: 'Category' },
+      amount_val: { bn: 'টাকার পরিমাণ', en: 'Amount' },
+      method: { bn: 'মাধ্যম', en: 'Method' },
+      ref: { bn: 'রেফারেন্স', en: 'Reference' },
+      qty: { bn: 'পরিমাণ', en: 'Qty' },
+      note: { bn: 'নোট / বিবরণ', en: 'Note / Details' },
+      edit: { bn: 'এডিট', en: 'Edit' },
+      delete: { bn: 'ডিলিট', en: 'Delete' },
+      confirm_delete: { bn: 'আপনি কি নিশ্চিতভাবে এই লেনদেনটি ডিলিট করতে চান?', en: 'Are you sure you want to delete this transaction?' },
+      export_pdf: { bn: 'ভাউচার ডাউনলোড (PDF)', en: 'Export Voucher (PDF)' },
+      voucher_no: { bn: 'ভাউচার নং', en: 'Voucher No' },
+      prepared_by: { bn: 'প্রস্তুতকারী', en: 'Prepared By' },
+      signature: { bn: 'স্বাক্ষর', en: 'Signature' },
+      authorized: { bn: 'অনুমোদিত স্বাক্ষর', en: 'Authorized Signature' }
     };
+
+
+
 
     return translations[key]?.[lang] || key;
   };
@@ -460,8 +822,12 @@ export default function Dashboard() {
   return (
     <main className={`pb-24 lg:pb-8 relative transition-all duration-300 ${lang === 'bn' ? 'bn-text' : 'en-text'}`}>
 
-      {/* Header */}
-      <header className="px-6 pt-8 pb-4 flex justify-between items-center">
+
+      {activeTab === 'dashboard' ? (
+        <>
+          {/* Header */}
+          <header className="px-6 pt-8 pb-4 flex justify-between items-center">
+
         <h1 className="text-2xl font-semibold tracking-tight text-white">{t('app_name')}</h1>
         <div className="flex gap-2">
           <button 
@@ -962,20 +1328,59 @@ export default function Dashboard() {
                   <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block">{t('desc')}</label>
                   <textarea 
                     placeholder={lang === 'bn' ? 'বিবরণ লিখুন...' : 'Enter details...'}
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
                     className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-sm focus:outline-none focus:border-red-500/50 min-h-[80px]"
                   />
+
                 </div>
 
                 {/* Voucher Upload */}
                 <div>
                   <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block">{t('voucher')}</label>
-                  <div className="border-2 border-dashed border-white/10 rounded-2xl p-8 flex flex-col items-center justify-center gap-2 hover:bg-white/5 transition-colors cursor-pointer">
-                    <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-white/20">
-                      <Plus size={24} />
+                  {!voucherPreview ? (
+                    <div 
+                      onClick={() => document.getElementById('expense-voucher-input')?.click()}
+                      className="border-2 border-dashed border-white/10 rounded-2xl p-8 flex flex-col items-center justify-center gap-2 hover:bg-white/5 transition-colors cursor-pointer"
+                    >
+                      <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-white/20">
+                        <UploadCloud size={24} />
+                      </div>
+                      <span className="text-xs text-white/40">{lang === 'bn' ? 'ভাউচার / মেমো আপলোড করুন' : 'Upload Voucher / Memo'}</span>
+                      <input 
+                        id="expense-voucher-input"
+                        type="file" 
+                        accept="image/*" 
+                        capture="environment"
+                        className="hidden" 
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setVoucherFile(file);
+                            setVoucherPreview(URL.createObjectURL(file));
+                          }
+                        }}
+                      />
                     </div>
-                    <span className="text-xs text-white/40">{lang === 'bn' ? 'ভাউচার / মেমো আপলোড করুন' : 'Upload Voucher / Memo'}</span>
-                  </div>
+                  ) : (
+                    <div className="relative rounded-2xl overflow-hidden border border-white/10 aspect-video group">
+                      <img src={voucherPreview} alt="Preview" className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/20 flex items-center justify-center gap-3">
+                        <button 
+                          onClick={() => {
+                            setVoucherFile(null);
+                            setVoucherPreview(null);
+                          }}
+                          className="w-12 h-12 rounded-full bg-red-500/90 flex items-center justify-center text-white shadow-2xl backdrop-blur-sm active:scale-90 transition-all"
+                        >
+                          <Trash2 size={24} />
+                        </button>
+                      </div>
+
+                    </div>
+                  )}
                 </div>
+
 
 
                 {/* Submit Button */}
@@ -992,21 +1397,33 @@ export default function Dashboard() {
                   <button 
                     onClick={async () => {
                       if (validate()) {
-                        const project = dbProjects.find(p => p.name === selectedProject);
-                        const { error } = await supabase
-                          .from('transactions')
-                          .insert([{
-                            project_id: project?.id,
-                            type: 'expense',
-                            nature: subCategory || mainCategory || 'Expense',
-                            amount: parseFloat(amount),
-                            category: mainCategory,
-                            subcategory: subCategory,
-                            payee_payer: selectedPayee,
-                            unit: selectedUnit,
-                            quantity: parseFloat(quantity)
-                          }]);
+                        setIsUploading(true);
+                        let vUrl = null;
+                        if (voucherFile) {
+                          vUrl = await uploadVoucher(voucherFile);
+                        }
 
+                        const project = dbProjects.find(p => p.name === selectedProject);
+                        
+                        const txData = {
+                          project_id: project?.id,
+                          type: 'expense',
+                          nature: subCategory || mainCategory || 'Expense',
+                          amount: parseFloat(amount),
+                          category: mainCategory,
+                          subcategory: subCategory,
+                          payee_payer: selectedPayee,
+                          unit: selectedUnit,
+                          quantity: parseFloat(quantity),
+                          description: description,
+                          voucher_url: vUrl || voucherPreview
+                        };
+
+                        const { error } = isEditMode
+                          ? await supabase.from('transactions').update(txData).eq('id', editingId)
+                          : await supabase.from('transactions').insert([txData]);
+
+                        setIsUploading(false);
                         if (error) {
                           alert('Error saving: ' + error.message);
                           return;
@@ -1018,12 +1435,18 @@ export default function Dashboard() {
                         setSelectedProject('');
                         setMainCategory('');
                         setSubCategory('');
+                        setDescription('');
+                        setVoucherFile(null);
+                        setVoucherPreview(null);
+                        setIsEditMode(false);
+                        setEditingId(null);
                         setErrors({});
                       }
                     }}
-                    className="w-full py-5 bg-[#E23636] rounded-2xl text-black font-bold uppercase tracking-widest shadow-xl shadow-red-900/40 active:scale-[0.98] transition-all"
+                    className="w-full py-5 bg-[#E23636] rounded-2xl text-black font-bold uppercase tracking-widest shadow-xl shadow-red-900/40 active:scale-[0.98] transition-all disabled:opacity-50"
+                    disabled={isUploading}
                   >
-                    {t('save')}
+                    {isUploading ? <Loader2 className="animate-spin mx-auto" /> : t('save')}
                   </button>
                 </div>
 
@@ -1067,7 +1490,15 @@ export default function Dashboard() {
                    getDisplayName(tx.nature).toLowerCase().includes(query) ||
                    getDisplayName(tx.project).toLowerCase().includes(query);
           }).map((tx) => (
-            <div key={tx.id} className="md3-card-elevated flex items-center p-4 gap-4">
+            <div 
+              key={tx.id} 
+              onClick={() => {
+                setSelectedTransaction(tx);
+                setShowTransactionDetails(true);
+              }}
+              className="md3-card-elevated flex items-center p-4 gap-4 cursor-pointer hover:bg-white/5 active:scale-[0.98] transition-all"
+            >
+
               <div className={`w-2 h-12 rounded-full ${tx.type === 'income' ? 'bg-[#00FF41]' : 'bg-[#E23636]'}`} />
               <div className="flex-1">
                 <div className="flex justify-between items-start">
@@ -1090,26 +1521,54 @@ export default function Dashboard() {
           ))}
         </div>
       </section>
+        </>
+      ) : activeTab === 'reports' ? (
+        <>
+          <header className="px-6 pt-8 pb-4 flex justify-between items-center">
+            <h1 className="text-2xl font-semibold tracking-tight text-white">{t('reports')}</h1>
+            <button 
+              onClick={() => setLang(lang === 'bn' ? 'en' : 'bn')}
+              className="px-3 py-1 rounded-full bg-white/10 text-[10px] font-bold uppercase tracking-widest hover:bg-white/20 transition-colors"
+            >
+              {lang === 'bn' ? 'English' : 'বাংলা'}
+            </button>
+          </header>
+          {renderReports()}
+        </>
+      ) : null}
 
       {/* Bottom Nav (Mobile Only) */}
       <nav className="fixed bottom-0 left-0 right-0 bg-[#1A1C1E] lg:hidden flex justify-around py-4 border-t border-white/10 z-50">
-        <button className="flex flex-col items-center gap-1 text-blue-400">
-          <TrendingUp size={22} />
+        <button 
+          onClick={() => setActiveTab('dashboard')}
+          className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'dashboard' ? 'text-blue-400 scale-110' : 'opacity-50 text-white'}`}
+        >
+          <LayoutDashboard size={22} />
           <span className="text-[10px]">{t('dashboard')}</span>
         </button>
-        <button className="flex flex-col items-center gap-1 opacity-50">
-          <ArrowUpRight size={22} />
+        <button 
+          onClick={() => setActiveTab('projects')}
+          className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'projects' ? 'text-blue-400 scale-110' : 'opacity-50 text-white'}`}
+        >
+          <Wallet size={22} />
           <span className="text-[10px]">{t('projects')}</span>
         </button>
-        <button className="flex flex-col items-center gap-1 opacity-50">
-          <ArrowDownLeft size={22} />
+        <button 
+          onClick={() => setActiveTab('reports')}
+          className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'reports' ? 'text-blue-400 scale-110' : 'opacity-50 text-white'}`}
+        >
+          <BarChart3 size={22} />
           <span className="text-[10px]">{t('reports')}</span>
         </button>
-        <button className="flex flex-col items-center gap-1 opacity-50">
+        <button 
+          onClick={() => setActiveTab('settings')}
+          className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'settings' ? 'text-blue-400 scale-110' : 'opacity-50 text-white'}`}
+        >
           <MoreVertical size={22} />
           <span className="text-[10px]">{t('settings')}</span>
         </button>
       </nav>
+
 
       {/* Add Income Modal */}
       <AnimatePresence>
@@ -1334,20 +1793,64 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* 5. Attachments */}
+                {/* Income Voucher Upload */}
                 <div>
                   <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block">{t('voucher')}</label>
-                  <div className="border-2 border-dashed border-white/10 rounded-2xl p-8 flex flex-col items-center justify-center gap-2 hover:bg-white/5 transition-colors cursor-pointer">
-                    <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-white/20">
-                      <Plus size={24} />
+                  {!voucherPreview ? (
+                    <div 
+                      onClick={() => document.getElementById('income-voucher-input')?.click()}
+                      className="border-2 border-dashed border-white/10 rounded-2xl p-8 flex flex-col items-center justify-center gap-2 hover:bg-white/5 transition-colors cursor-pointer"
+                    >
+                      <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-white/20">
+                        <UploadCloud size={24} />
+                      </div>
+                      <span className="text-xs text-white/40">{lang === 'bn' ? 'ভাউচার / মেমো আপলোড করুন' : 'Upload Voucher / Memo'}</span>
+                      <input 
+                        id="income-voucher-input"
+                        type="file" 
+                        accept="image/*" 
+                        capture="environment"
+                        className="hidden" 
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setVoucherFile(file);
+                            setVoucherPreview(URL.createObjectURL(file));
+                          }
+                        }}
+                      />
                     </div>
-                    <span className="text-xs text-white/40">{lang === 'bn' ? 'ভাউচার / মেমো আপলোড করুন' : 'Upload Voucher / Memo'}</span>
-                  </div>
+                  ) : (
+                    <div className="relative rounded-2xl overflow-hidden border border-white/10 aspect-video group">
+                      <img src={voucherPreview} alt="Preview" className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/20 flex items-center justify-center gap-3">
+                        <button 
+                          onClick={() => {
+                            setVoucherFile(null);
+                            setVoucherPreview(null);
+                          }}
+                          className="w-12 h-12 rounded-full bg-red-500/90 flex items-center justify-center text-white shadow-2xl backdrop-blur-sm active:scale-90 transition-all"
+                        >
+                          <Trash2 size={24} />
+                        </button>
+                      </div>
+
+                    </div>
+                  )}
                 </div>
 
+                {/* Income Description */}
+                <div>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block">{t('desc')}</label>
+                  <textarea 
+                    placeholder={lang === 'bn' ? 'বিবরণ লিখুন...' : 'Enter details...'}
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-sm focus:outline-none focus:border-green-500/50 min-h-[80px]"
+                  />
+                </div>
 
                 <div className="pt-6">
-
                   <button 
                     onClick={async () => {
                       const newErrors: Record<string, string> = {};
@@ -1361,21 +1864,33 @@ export default function Dashboard() {
                       
                       setErrors(newErrors);
                       if (Object.keys(newErrors).length === 0) {
-                        const project = dbProjects.find(p => p.name === selectedProject);
-                        const { error } = await supabase
-                          .from('transactions')
-                          .insert([{
-                            project_id: project?.id,
-                            type: 'income',
-                            nature: incomeSubCategory || incomeCategory || 'Income',
-                            amount: parseFloat(incomeAmount),
-                            category: incomeCategory,
-                            subcategory: incomeSubCategory,
-                            payee_payer: selectedPayer,
-                            payment_method: paymentMethod,
-                            ref_no: refNo
-                          }]);
+                        setIsUploading(true);
+                        let vUrl = null;
+                        if (voucherFile) {
+                          vUrl = await uploadVoucher(voucherFile);
+                        }
 
+                        const project = dbProjects.find(p => p.name === selectedProject);
+                        
+                        const txData = {
+                          project_id: project?.id,
+                          type: 'income',
+                          nature: incomeSubCategory || incomeCategory || 'Income',
+                          amount: parseFloat(incomeAmount),
+                          category: incomeCategory,
+                          subcategory: incomeSubCategory,
+                          payee_payer: selectedPayer,
+                          payment_method: paymentMethod,
+                          ref_no: refNo,
+                          description: description,
+                          voucher_url: vUrl || voucherPreview
+                        };
+
+                        const { error } = isEditMode
+                          ? await supabase.from('transactions').update(txData).eq('id', editingId)
+                          : await supabase.from('transactions').insert([txData]);
+
+                        setIsUploading(false);
                         if (error) {
                           alert('Error saving: ' + error.message);
                           return;
@@ -1389,11 +1904,18 @@ export default function Dashboard() {
                         setIncomeSubCategory('');
                         setPaymentMethod('');
                         setRefNo('');
+                        setDescription('');
+                        setVoucherFile(null);
+                        setVoucherPreview(null);
+                        setIsEditMode(false);
+                        setEditingId(null);
                       }
+
                     }}
-                    className="w-full bg-green-600 hover:bg-green-700 text-black font-bold py-4 rounded-2xl shadow-lg shadow-green-500/20 transition-all flex items-center justify-center gap-2"
+                    disabled={isUploading}
+                    className="w-full bg-green-600 hover:bg-green-700 text-black font-bold py-4 rounded-2xl shadow-lg shadow-green-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                   >
-                    <Check size={20} />
+                    {isUploading ? <Loader2 className="animate-spin" size={20} /> : <Check size={20} />}
                     {t('save')}
                   </button>
                 </div>
@@ -1402,6 +1924,7 @@ export default function Dashboard() {
           </>
         )}
       </AnimatePresence>
+
       {/* Team Management Modal */}
       <AnimatePresence>
         {showTeamModal && (
@@ -1597,7 +2120,280 @@ export default function Dashboard() {
           </>
         )}
       </AnimatePresence>
+      {/* Transaction Details Modal */}
+      <AnimatePresence>
+        {showTransactionDetails && selectedTransaction && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowTransactionDetails(false)}
+              className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[80]"
+            />
+            <motion.div 
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="fixed bottom-0 left-0 right-0 bg-[#1A1C1E] rounded-t-[32px] z-[90] max-h-[92vh] overflow-y-auto px-6 pb-12 pt-4 shadow-2xl border-t border-white/10"
+            >
+              <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mb-8" />
+              
+              <div className="flex justify-between items-center mb-8">
+                <h2 className="text-xl font-bold text-white flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${selectedTransaction.type === 'income' ? 'bg-[#00FF41]/20 text-[#00FF41]' : 'bg-[#E23636]/20 text-[#E23636]'}`}>
+                    {selectedTransaction.type === 'income' ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
+                  </div>
+                  {t('tx_details')}
+                </h2>
+                <button onClick={() => setShowTransactionDetails(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/40">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-8">
+                {/* 1. Big Amount */}
+                <div className="text-center py-4">
+                  <div className={`text-4xl font-black mb-1 ${selectedTransaction.type === 'income' ? 'text-[#00FF41]' : 'text-[#E23636]'}`}>
+                    {selectedTransaction.type === 'income' ? '+' : '-'} ৳ {selectedTransaction.amount.toLocaleString()}
+                  </div>
+                  <div className="text-xs opacity-40 font-bold uppercase tracking-[0.2em]">{getDisplayName(selectedTransaction.nature)}</div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-y-8 gap-x-4 bg-white/5 rounded-3xl p-6">
+                  {/* Project */}
+                  <div>
+                    <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{t('project')}</label>
+                    <div className="text-sm font-bold text-white">{getDisplayName(selectedTransaction.project)}</div>
+                  </div>
+
+                  {/* Date/Time */}
+                  <div>
+                    <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{t('date_time')}</label>
+                    <div className="text-sm font-bold text-white">{selectedTransaction.time}</div>
+                  </div>
+
+                  {/* Category */}
+                  <div>
+                    <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{t('category')}</label>
+                    <div className="text-sm font-bold text-white">
+                      {getDisplayName(selectedTransaction.category)}
+                      {selectedTransaction.subcategory && (
+                        <span className="opacity-50 font-medium"> / {getDisplayName(selectedTransaction.subcategory)}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Payee/Payer */}
+                  <div>
+                    <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{selectedTransaction.type === 'income' ? t('payer') : t('payee')}</label>
+                    <div className="text-sm font-bold text-white">{getDisplayName(selectedTransaction.payee_payer) || '—'}</div>
+                  </div>
+
+                  {/* Conditional Fields: Method/Ref for Income */}
+                  {selectedTransaction.type === 'income' && (
+                    <>
+                      <div>
+                        <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{t('method')}</label>
+                        <div className="text-sm font-bold text-white">{getDisplayName(selectedTransaction.payment_method) || 'Cash'}</div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{t('ref')}</label>
+                        <div className="text-sm font-bold text-white">{selectedTransaction.ref_no || '—'}</div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Conditional Fields: Qty/Unit for Expense */}
+                  {selectedTransaction.type === 'expense' && selectedTransaction.quantity && (
+                    <div>
+                      <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{t('qty')}</label>
+                      <div className="text-sm font-bold text-white">
+                        {selectedTransaction.quantity} <span className="opacity-50 text-[10px] uppercase ml-1">{getDisplayName(selectedTransaction.unit)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Description/Notes */}
+                {selectedTransaction.description && (
+                  <div className="px-2">
+                    <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block">{t('note')}</label>
+                    <div className="text-sm text-white/80 bg-white/5 border border-white/10 rounded-2xl p-4 italic leading-relaxed">
+                      "{selectedTransaction.description}"
+                    </div>
+                  </div>
+                )}
+
+                {/* Voucher Image */}
+                {selectedTransaction.voucher_url && (
+                  <div className="px-2">
+                    <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block">{t('voucher')}</label>
+                    <div className="rounded-2xl overflow-hidden border border-white/10 shadow-lg">
+                      <img 
+                        src={selectedTransaction.voucher_url} 
+                        alt="Voucher" 
+                        className="w-full h-auto cursor-pointer"
+                        onClick={() => window.open(selectedTransaction.voucher_url, '_blank')}
+                      />
+                    </div>
+                  </div>
+                )}
+
+
+                {/* Action Buttons */}
+                <div className="space-y-3">
+                  <button 
+                    onClick={() => generatePDF(selectedTransaction)}
+                    className="w-full py-4 bg-white/10 hover:bg-white/20 text-white rounded-2xl font-bold uppercase tracking-widest flex items-center justify-center gap-3 active:scale-[0.98] transition-all border border-white/5"
+                  >
+                    <Download size={20} />
+                    {t('export_pdf')}
+                  </button>
+
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={() => handleEditClick(selectedTransaction)}
+                      className="flex-1 py-4 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-2xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                    >
+                      <Edit2 size={18} />
+                      {t('edit')}
+                    </button>
+                    <button 
+                      onClick={() => handleDelete(selectedTransaction.id)}
+                      className="flex-1 py-4 bg-red-600/20 text-red-400 border border-red-500/30 rounded-2xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                    >
+                      <Trash2 size={18} />
+                      {t('delete')}
+                    </button>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => setShowTransactionDetails(false)}
+                  className="w-full py-4 bg-white/5 text-white/40 rounded-2xl text-xs font-bold uppercase tracking-[0.2em] active:scale-[0.98] transition-all"
+                >
+                  {lang === 'bn' ? 'বন্ধ করুন' : 'Close'}
+                </button>
+
+
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Hidden PDF Template Container */}
+      <div className="fixed top-[-9999px] left-[-9999px]" aria-hidden="true">
+        <div id="voucher-export-container" className="w-[800px] bg-white p-12 leading-relaxed" style={{ backgroundColor: '#FFFFFF', color: '#000000', fontFamily: 'sans-serif' }}>
+          {selectedTransaction && (
+            <div className="p-10 bg-white" style={{ border: '12px double #F3F4F6' }}>
+              {/* Header */}
+              <div className="flex justify-between items-start mb-12 pb-8" style={{ borderBottom: '2px solid #F3F4F6' }}>
+                <div>
+                  <h1 className="text-4xl font-black uppercase tracking-tighter mb-1" style={{ color: '#111827' }}>Contractors<span style={{ color: '#2563EB' }}>BD</span></h1>
+                  <p className="text-[10px] uppercase font-bold tracking-[0.3em]" style={{ color: '#9CA3AF' }}>Construction Management System</p>
+                </div>
+                <div className="text-right">
+                  <div className="inline-block px-4 py-1.5 rounded-full text-xs font-bold uppercase mb-3" style={{ 
+                    backgroundColor: selectedTransaction.type === 'income' ? '#DCFCE7' : '#FEE2E2', 
+                    color: selectedTransaction.type === 'income' ? '#15803D' : '#B91C1C' 
+                  }}>
+                    {selectedTransaction.type.toUpperCase()} VOUCHER
+                  </div>
+                  <p className="text-sm font-black" style={{ color: '#111827' }}>{t('voucher_no')}: <span style={{ color: '#2563EB' }}>TX-{selectedTransaction.id.slice(0, 8).toUpperCase()}</span></p>
+                </div>
+              </div>
+
+              {/* Info Grid */}
+              <div className="grid grid-cols-2 gap-y-8 gap-x-16 mb-12">
+                <div className="pb-2" style={{ borderBottom: '1px solid #F9FAFB' }}>
+                  <label className="text-[10px] uppercase font-bold block mb-1" style={{ color: '#9CA3AF' }}>{t('project')}</label>
+                  <p className="text-lg font-bold" style={{ color: '#1F2937' }}>{getDisplayName(selectedTransaction.project)}</p>
+                </div>
+                <div className="pb-2" style={{ borderBottom: '1px solid #F9FAFB' }}>
+                  <label className="text-[10px] uppercase font-bold block mb-1" style={{ color: '#9CA3AF' }}>{t('date_time')}</label>
+                  <p className="text-lg font-bold" style={{ color: '#1F2937' }}>{selectedTransaction.time}</p>
+                </div>
+                <div className="pb-2" style={{ borderBottom: '1px solid #F9FAFB' }}>
+                  <label className="text-[10px] uppercase font-bold block mb-1" style={{ color: '#9CA3AF' }}>{selectedTransaction.type === 'income' ? t('payer') : t('payee')}</label>
+                  <p className="text-lg font-bold" style={{ color: '#1F2937' }}>{getDisplayName(selectedTransaction.payee_payer) || '—'}</p>
+                </div>
+                <div className="pb-2" style={{ borderBottom: '1px solid #F9FAFB' }}>
+                  <label className="text-[10px] uppercase font-bold block mb-1" style={{ color: '#9CA3AF' }}>{t('category')}</label>
+                  <p className="text-lg font-bold" style={{ color: '#1F2937' }}>
+                    {getDisplayName(selectedTransaction.category)}
+                    {selectedTransaction.subcategory && <span className="text-sm ml-1" style={{ color: '#9CA3AF', fontWeight: 500 }}>/ {getDisplayName(selectedTransaction.subcategory)}</span>}
+                  </p>
+                </div>
+              </div>
+
+              {/* Amount Highlight */}
+              <div className="p-10 rounded-[32px] mb-12 flex justify-between items-center" style={{ 
+                backgroundColor: selectedTransaction.type === 'income' ? '#F0FDF4' : '#FEF2F2'
+              }}>
+                <div>
+                  <label className="text-[10px] uppercase font-bold block mb-1" style={{ color: '#9CA3AF' }}>{t('amount_val')}</label>
+                  <p className="text-xs uppercase font-medium" style={{ color: '#9CA3AF' }}>{selectedTransaction.type === 'income' ? 'Received Amount' : 'Disbursed Amount'}</p>
+                </div>
+                <span className="text-5xl font-black" style={{ 
+                  color: selectedTransaction.type === 'income' ? '#16A34A' : '#DC2626' 
+                }}>
+                  ৳ {selectedTransaction.amount.toLocaleString()}
+                </span>
+              </div>
+
+              {/* Notes */}
+              {selectedTransaction.description && (
+                <div className="mb-12">
+                  <label className="text-[10px] uppercase font-bold block mb-3" style={{ color: '#9CA3AF' }}>{t('note')}</label>
+                  <div className="rounded-2xl p-6 italic text-sm leading-relaxed" style={{ 
+                    backgroundColor: '#F9FAFB', color: '#4B5563', border: '1px solid #F3F4F6' 
+                  }}>
+                    "{selectedTransaction.description}"
+                  </div>
+                </div>
+              )}
+
+              {/* Attached Voucher Image */}
+              {selectedTransaction.voucher_url && (
+                <div className="mb-12 pt-10" style={{ borderTop: '1px solid #F9FAFB' }}>
+                   <label className="text-[10px] uppercase font-bold block mb-4" style={{ color: '#9CA3AF' }}>{t('voucher')} (Attached Copy)</label>
+                   <div className="max-w-[350px] rounded-2xl overflow-hidden shadow-sm" style={{ border: '1px solid #E5E7EB' }}>
+                      <img 
+                        src={selectedTransaction.voucher_url} 
+                        className="w-full h-auto"
+                        crossOrigin="anonymous"
+                      />
+                   </div>
+                </div>
+              )}
+
+              {/* Signature Area */}
+              <div className="flex justify-between mt-24 pt-12" style={{ borderTop: '1px solid #F3F4F6' }}>
+                <div className="text-center w-56">
+                  <div className="h-0.5 mb-3 mx-4" style={{ backgroundColor: '#111827' }}></div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: '#9CA3AF' }}>{t('prepared_by')}</p>
+                </div>
+                <div className="text-center w-56">
+                  <div className="h-0.5 mb-3 mx-4" style={{ backgroundColor: '#111827' }}></div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: '#9CA3AF' }}>{t('authorized')}</p>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="mt-16 text-center">
+                <p className="text-[8px] uppercase tracking-[0.5em] font-bold" style={{ color: '#D1D5DB' }}>Generated via ContractorsBD Mobile Application</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
     </main>
+
+
   );
 }
 
