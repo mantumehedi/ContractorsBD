@@ -34,8 +34,17 @@ import {
   LayoutDashboard,
   BarChart3,
   PieChart,
-  Wallet
+  Wallet,
+  Fuel,
+  HardHat,
+  Package,
+  Briefcase,
+  Layers,
+  Activity,
+  ArrowRight,
+  Database
 } from 'lucide-react';
+
 
 
 
@@ -162,6 +171,9 @@ export default function Dashboard() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'projects' | 'settings'>('dashboard');
   const [selectedReportProjectId, setSelectedReportProjectId] = useState<string | null>(null);
+  const [reportDateFilter, setReportDateFilter] = useState<string>('');
+  const [reportDaysLimit, setReportDaysLimit] = useState<number>(7);
+  const [projectSubTab, setProjectSubTab] = useState<'running' | 'completed' | 'archived'>('running');
 
 
 
@@ -175,35 +187,29 @@ export default function Dashboard() {
   // Fetch data on mount
   useEffect(() => {
     const checkUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        router.push('/login');
-      } else {
-        setUser(user);
-        
-        // Ensure profile exists and fetch role
-        let { data: profile, error } = await supabase
-          .from('profiles')
-          .select('global_role')
-          .eq('id', user.id)
-          .single();
-        
-        if (error && error.code === 'PGRST116') {
-          // Profile doesn't exist (for older users before the trigger was added)
-          const { data: newProfile } = await supabase
-            .from('profiles')
-            .insert({ id: user.id, email: user.email, global_role: 'contractor' })
-            .select()
-            .single();
-          profile = newProfile;
-        }
-
-        if (profile) setUserRole(profile.global_role as any);
-        fetchInitialData();
-      }
+      // Login verification disabled for now
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      
+      const mockUser = authUser || { 
+        id: '00000000-0000-0000-0000-000000000000', 
+        email: 'dev@contractorsbd.com',
+        user_metadata: { full_name: 'Dev Admin' }
+      };
+      
+      setUser(mockUser);
+      setUserRole('contractor'); // Default to contractor for full access
+      fetchInitialData();
     };
+
+
     checkUser();
   }, []);
+
+  // Reset report filters when switching projects
+  useEffect(() => {
+    setReportDaysLimit(7);
+    setReportDateFilter('');
+  }, [selectedReportProjectId]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -362,6 +368,7 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
+
   };
 
 
@@ -424,8 +431,7 @@ export default function Dashboard() {
         expense,
         profit: income - expense
       };
-    }).filter(p => p.status === 'running')
-      .slice(0, 2);
+    }).filter(p => p.status === 'running');
   }, [dbProjects, transactions]);
 
 
@@ -458,168 +464,641 @@ export default function Dashboard() {
   }, [transactions]);
 
 
-  const renderReports = () => {
-    // Aggregation for selected project
-    const project = dbProjects.find(p => p.id === selectedReportProjectId);
-    const projectTx = transactions.filter(tx => tx.project_id === selectedReportProjectId);
-    
-    const income = projectTx.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
-    const expense = projectTx.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
-    
-    const projectCategoryBreakdown: Record<string, number> = {};
-    projectTx.filter(tx => tx.type === 'expense').forEach(tx => {
-      const cat = tx.category || 'Others';
-      projectCategoryBreakdown[cat] = (projectCategoryBreakdown[cat] || 0) + tx.amount;
-    });
+  const DonutChart = ({ data, total }: { data: { name: string, value: number }[], total: number }) => {
+    const radius = 40;
+    const circumference = 2 * Math.PI * radius;
+    let accumulatedOffset = 0;
 
-    const projectCategories = Object.entries(projectCategoryBreakdown)
-      .sort(([, a], [, b]) => b - a)
-      .map(([name, value]) => ({ name, value }));
+    const colors: Record<string, string> = {
+      'Material': '#F59E0B',
+      'Labor': '#10B981',
+      'Vehicle & Fuel': '#3B82F6',
+      'Office': '#8B5CF6',
+      'Others': '#6B7280'
+    };
 
     return (
-      <div className="px-6 pb-12 animate-in fade-in duration-500">
-         {/* Project Selector Header */}
-         <div className="mb-8">
-            <label className="text-[10px] uppercase font-bold tracking-[0.3em] text-white/40 mb-3 block">
-              {lang === 'bn' ? 'প্রজেক্ট সিলেক্ট করুন' : 'Select Project for Report'}
-            </label>
-            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
-              <button 
-                onClick={() => setSelectedReportProjectId(null)}
-                className={`flex-none px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all ${!selectedReportProjectId ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'bg-white/5 text-white/40'}`}
-              >
-                {lang === 'bn' ? 'সব প্রজেক্ট' : 'All Projects'}
-              </button>
-              {dbProjects.map(p => (
-                <button 
-                  key={p.id}
-                  onClick={() => setSelectedReportProjectId(p.id)}
-                  className={`flex-none px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all ${selectedReportProjectId === p.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'bg-white/5 text-white/40'}`}
-                >
-                  {getDisplayName(p.name)}
-                </button>
-              ))}
-            </div>
-         </div>
+      <div className="relative flex items-center justify-center">
+        <svg width="200" height="200" viewBox="0 0 100 100" className="transform -rotate-90">
+          {data.map((item, i) => {
+            const percentage = (item.value / (total || 1)) * 100;
+            const strokeDasharray = `${(percentage * circumference) / 100} ${circumference}`;
+            const strokeDashoffset = -accumulatedOffset;
+            accumulatedOffset += (percentage * circumference) / 100;
 
-         {!selectedReportProjectId ? (
-           <div className="grid grid-cols-1 gap-6">
-             <div className="mb-2">
-               <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-white/40 px-1">
-                 {lang === 'bn' ? 'প্রজেক্ট ভিত্তিক রিপোর্ট' : 'Project Wise Summary'}
-               </h3>
-             </div>
-             {projectStats.map(p => (
-               <div key={p.id} className="md3-card p-6 border border-white/5 bg-gradient-to-br from-white/5 to-transparent relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[50px] -mr-16 -mt-16 group-hover:bg-blue-500/10 transition-all" />
-                  
-                  <div className="flex justify-between items-start mb-6 relative z-10">
-                    <div>
-                      <h4 className="text-xl font-black text-white">{getDisplayName(p.name)}</h4>
-                      <p className="text-[10px] text-white/30 uppercase font-bold mt-1 tracking-widest">Performance Matrix</p>
-                    </div>
-                    <span className={`text-xs font-black px-3 py-1 rounded-full ${p.profit >= 0 ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                      {Math.round((p.profit / (p.income || 1)) * 100)}% Margin
-                    </span>
-                  </div>
-                  
-                  <div className="grid grid-cols-3 gap-3 mb-6 relative z-10">
-                    <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
-                      <p className="text-[8px] text-white/30 uppercase font-bold mb-1">{t('income')}</p>
-                      <p className="text-sm font-black text-[#00FF41]">৳{p.income.toLocaleString()}</p>
-                    </div>
-                    <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
-                      <p className="text-[8px] text-white/30 uppercase font-bold mb-1">{t('expense')}</p>
-                      <p className="text-sm font-black text-[#E23636]">৳{p.expense.toLocaleString()}</p>
-                    </div>
-                    <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
-                      <p className="text-[8px] text-white/30 uppercase font-bold mb-1">{t('profit')}</p>
-                      <p className="text-sm font-black text-blue-400">৳{p.profit.toLocaleString()}</p>
-                    </div>
-                  </div>
-
-                  <button 
-                    onClick={() => setSelectedReportProjectId(p.id)}
-                    className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-xs font-bold uppercase tracking-widest text-white/60 transition-all flex items-center justify-center gap-2 border border-white/5"
-                  >
-                    {lang === 'bn' ? 'বিস্তারিত ক্যাটাগরি দেখুন' : 'Category Breakdown'} <ArrowUpRight size={16} />
-                  </button>
-               </div>
-             ))}
-           </div>
-         ) : (
-           <div className="animate-in slide-in-from-right duration-300">
-              {/* Project Specific Summary */}
-              <div className="md3-card-elevated p-8 mb-10 text-center bg-gradient-to-br from-[#2D2F31] to-[#1A1C1E] border border-white/5 relative overflow-hidden">
-                <div className="absolute inset-0 bg-blue-600/5 pointer-events-none" />
-                <label className="text-[10px] uppercase font-bold tracking-[0.3em] text-white/40 mb-3 block relative z-10">
-                  {getDisplayName(project?.name)} — {t('profit')}
-                </label>
-                <h2 className={`text-5xl font-black mb-2 relative z-10 ${income - expense >= 0 ? 'text-[#00FF41]' : 'text-[#E23636]'}`}>
-                  ৳ {(income - expense).toLocaleString()}
-                </h2>
-                <div className="flex justify-center gap-8 mt-8 relative z-10">
-                  <div>
-                    <p className="text-[10px] text-white/30 uppercase font-bold mb-1 tracking-widest">{t('income')}</p>
-                    <p className="text-[#00FF41] text-lg font-black">৳ {income.toLocaleString()}</p>
-                  </div>
-                  <div className="w-px h-10 bg-white/10" />
-                  <div>
-                    <p className="text-[10px] text-white/30 uppercase font-bold mb-1 tracking-widest">{t('expense')}</p>
-                    <p className="text-[#E23636] text-lg font-black">৳ {expense.toLocaleString()}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Category Breakdown for Project */}
-              <div className="mb-12">
-                <h3 className="text-lg font-bold text-white mb-8 flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center text-blue-400">
-                    <PieChart size={20} />
-                  </div>
-                  {lang === 'bn' ? 'ব্যয়ের খাতসমূহ' : 'Spending Breakdown'}
-                </h3>
-                <div className="space-y-7">
-                  {projectCategories.length > 0 ? projectCategories.map((cat, idx) => (
-                    <div key={cat.name} className="relative">
-                      <div className="flex justify-between items-end mb-3 px-1">
-                        <span className="text-sm font-bold text-white/80 tracking-wide">{getDisplayName(cat.name)}</span>
-                        <div className="text-right">
-                          <span className="text-xs font-black text-white block">৳ {cat.value.toLocaleString()}</span>
-                          <span className="text-[8px] font-bold text-white/30 uppercase">{Math.round((cat.value / (expense || 1)) * 100)}%</span>
-                        </div>
-                      </div>
-                      <div className="h-3.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${(cat.value / (expense || 1)) * 100}%` }}
-                          transition={{ duration: 1, delay: idx * 0.1, ease: "easeOut" }}
-                          className={`h-full rounded-full ${
-                            idx % 3 === 0 ? 'bg-blue-500' : idx % 3 === 1 ? 'bg-purple-500' : 'bg-emerald-500'
-                          }`}
-                        />
-                      </div>
-                    </div>
-                  )) : (
-                    <div className="bg-white/2 border border-dashed border-white/10 rounded-3xl p-12 text-center">
-                      <PieChart size={40} className="mx-auto mb-4 text-white/10" />
-                      <p className="text-white/20 text-xs italic">No expenses recorded for this project.</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <button 
-                onClick={() => setSelectedReportProjectId(null)}
-                className="w-full py-5 bg-white/5 hover:bg-white/10 text-white/40 rounded-3xl text-[10px] font-bold uppercase tracking-[0.3em] active:scale-[0.98] transition-all border border-white/5"
-              >
-                ← {lang === 'bn' ? 'প্রজেক্ট লিস্টে ফিরে যান' : 'Back to All Projects'}
-              </button>
-           </div>
-         )}
+            return (
+              <motion.circle
+                key={item.name}
+                cx="50"
+                cy="50"
+                r={radius}
+                fill="transparent"
+                stroke={colors[item.name] || colors['Others']}
+                strokeWidth="12"
+                strokeDasharray={strokeDasharray}
+                strokeDashoffset={strokeDashoffset}
+                strokeLinecap="round"
+                initial={{ strokeDasharray: `0 ${circumference}` }}
+                animate={{ strokeDasharray }}
+                transition={{ duration: 1, delay: i * 0.1, ease: "easeOut" }}
+                className="transition-all hover:stroke-[14]"
+              />
+            );
+          })}
+          {/* Base Circle if no data */}
+          {total === 0 && (
+            <circle cx="50" cy="50" r={radius} fill="transparent" stroke="#333" strokeWidth="12" />
+          )}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+          <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">{lang === 'bn' ? 'মোট ব্যয়' : 'Total Expense'}</p>
+          <p className="text-lg font-black text-white">৳{total.toLocaleString()}</p>
+        </div>
       </div>
     );
   };
+
+  const AreaChart = ({ transactions }: { transactions: any[] }) => {
+    const sorted = [...transactions].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    
+    // Aggregate by day
+    const daily: Record<string, { income: number, expense: number }> = {};
+    sorted.forEach(tx => {
+      const d = new Date(tx.created_at).toISOString().split('T')[0];
+      if (!daily[d]) daily[d] = { income: 0, expense: 0 };
+      if (tx.type === 'income') daily[d].income += tx.amount;
+      else daily[d].expense += tx.amount;
+    });
+
+    const days = Object.keys(daily).sort();
+    let cumInc = 0;
+    let cumExp = 0;
+    const points = days.map(d => {
+      cumInc += daily[d].income;
+      cumExp += daily[d].expense;
+      return { income: cumInc, expense: cumExp };
+    });
+
+    if (points.length < 2) return null;
+
+    const maxVal = Math.max(...points.map(p => Math.max(p.income, p.expense)), 1);
+    const width = 300;
+    const height = 100;
+
+    const getPath = (key: 'income' | 'expense') => {
+      return points.map((p, i) => {
+        const x = (i / (points.length - 1)) * width;
+        const y = height - (p[key] / maxVal) * height;
+        return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+      }).join(' ');
+    };
+
+    const getAreaPath = (key: 'income' | 'expense') => {
+      const line = getPath(key);
+      return `${line} L ${width} ${height} L 0 ${height} Z`;
+    };
+
+    return (
+      <div className="w-full h-32 relative mt-4">
+        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="overflow-visible">
+          {/* Income Area */}
+          <motion.path
+            d={getAreaPath('income')}
+            fill="url(#incomeGradient)"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.3 }}
+            transition={{ duration: 1.5 }}
+          />
+          {/* Expense Area */}
+          <motion.path
+            d={getAreaPath('expense')}
+            fill="url(#expenseGradient)"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.3 }}
+            transition={{ duration: 1.5, delay: 0.2 }}
+          />
+          
+          {/* Income Line */}
+          <motion.path
+            d={getPath('income')}
+            fill="transparent"
+            stroke="#00FF41"
+            strokeWidth="2"
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: 1 }}
+            transition={{ duration: 2 }}
+          />
+          {/* Expense Line */}
+          <motion.path
+            d={getPath('expense')}
+            fill="transparent"
+            stroke="#E23636"
+            strokeWidth="2"
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: 1 }}
+            transition={{ duration: 2, delay: 0.3 }}
+          />
+
+          <defs>
+            <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#00FF41" stopOpacity="1" />
+              <stop offset="100%" stopColor="#00FF41" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="expenseGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#E23636" stopOpacity="1" />
+              <stop offset="100%" stopColor="#E23636" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+    );
+  };
+
+  const renderProjects = () => {
+    const filtered = dbProjects.filter(p => p.status === projectSubTab);
+
+    return (
+      <div className="px-6 pb-20 animate-in fade-in duration-500">
+        {/* Status Tabs */}
+        <div className="flex gap-2 mb-8 bg-white/5 p-1.5 rounded-2xl border border-white/5 sticky top-0 z-20 backdrop-blur-md">
+          {['running', 'completed', 'archived'].map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setProjectSubTab(tab as any)}
+              className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                projectSubTab === tab ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-white/40 hover:text-white/60'
+              }`}
+            >
+              {lang === 'bn' 
+                ? (tab === 'running' ? 'চলমান' : tab === 'completed' ? 'সম্পন্ন' : 'আর্কাইভ')
+                : tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        {/* Project Cards */}
+        <div className="space-y-4">
+          {filtered.length > 0 ? filtered.map((p) => (
+            <div key={p.id} className="md3-card-elevated p-6 border border-white/5 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[40px] -mr-16 -mt-16 group-hover:bg-blue-500/10 transition-all" />
+              
+              <div className="flex justify-between items-start mb-4 relative z-10">
+                <div>
+                  <h3 className="text-xl font-black text-white">{getDisplayName(p.name)}</h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className={`w-1.5 h-1.5 rounded-full ${p.status === 'running' ? 'bg-green-500 animate-pulse' : 'bg-white/20'}`} />
+                    <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">
+                      {p.status === 'running' ? (lang === 'bn' ? 'চলমান অবস্থা' : 'Running Status') : (lang === 'bn' ? 'বন্ধ প্রজেক্ট' : 'Closed Project')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 mt-6 relative z-10">
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                  <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{lang === 'bn' ? 'সাইট ম্যানেজার' : 'Site Manager'}</p>
+                  <div className="flex items-center gap-2">
+                    <Users size={14} className="text-blue-400" />
+                    <span className="text-xs font-bold text-white">4 {lang === 'bn' ? 'সদস্য' : 'Active'}</span>
+                  </div>
+                </div>
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                  <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{lang === 'bn' ? 'শুরু হয়েছে' : 'Started'}</p>
+                  <div className="flex items-center gap-2">
+                    <Calendar size={14} className="text-green-400" />
+                    <span className="text-xs font-bold text-white">Apr 2024</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 flex gap-3 relative z-10">
+                <button 
+                  onClick={() => setShowTeamModal(true)}
+                  className="flex-1 py-3.5 bg-white/5 hover:bg-white/10 text-white/80 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-white/5 flex items-center justify-center gap-2"
+                >
+                  <Users size={14} /> {lang === 'bn' ? 'টিম ম্যানেজ' : 'Manage Team'}
+                </button>
+                <button className="px-5 py-3.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-blue-600/20 flex items-center justify-center gap-2">
+                  <Edit2 size={14} /> {lang === 'bn' ? 'এডিট' : 'Edit Info'}
+                </button>
+              </div>
+            </div>
+          )) : (
+            <div className="py-20 text-center opacity-20">
+              <Package size={48} className="mx-auto mb-4" />
+              <p className="text-sm font-bold uppercase tracking-[0.2em]">{lang === 'bn' ? 'কোন প্রজেক্ট পাওয়া যায়নি' : 'No Projects Found'}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderReports = () => {
+    const getCategoryIcon = (category: string) => {
+      switch (category) {
+        case 'Material': return <Package size={18} />;
+        case 'Labor': return <HardHat size={18} />;
+        case 'Vehicle & Fuel': return <Fuel size={18} />;
+        case 'Office': return <Briefcase size={18} />;
+        default: return <Layers size={18} />;
+      }
+    };
+
+    const getCategoryColorClass = (category: string) => {
+      switch (category) {
+        case 'Material': return 'bg-cat-material';
+        case 'Labor': return 'bg-cat-labor';
+        case 'Vehicle & Fuel': return 'bg-cat-vehicle';
+        case 'Office': return 'bg-cat-office';
+        default: return 'bg-cat-others';
+      }
+    };
+
+    // Aggregation for selected project
+    const isAllProjects = !selectedReportProjectId;
+    const project = dbProjects.find(p => p.id === selectedReportProjectId);
+    const relevantTx = isAllProjects 
+      ? transactions 
+      : transactions.filter(tx => tx.project_id === selectedReportProjectId);
+    
+    const income = relevantTx.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+    const expense = relevantTx.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+    const profit = income - expense;
+    
+    const categoryBreakdown: Record<string, number> = {};
+    relevantTx.filter(tx => tx.type === 'expense').forEach(tx => {
+      const cat = tx.category || 'Others';
+      categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + tx.amount;
+    });
+
+    const categories = Object.entries(categoryBreakdown)
+      .sort(([, a], [, b]) => b - a)
+      .map(([name, value]) => ({ name, value }));
+
+    const runningProjects = dbProjects.filter(p => p.status === 'running');
+
+    return (
+      <div className="px-6 pb-20 animate-in fade-in duration-500">
+        {/* Modern Project Selector (Dropdown) */}
+        <div className="mb-8 sticky top-0 z-30 bg-[#1A1C1E]/80 backdrop-blur-md py-4 -mx-6 px-6 border-b border-white/5">
+          <div className="relative group">
+            <select 
+              value={selectedReportProjectId || ''}
+              onChange={(e) => setSelectedReportProjectId(e.target.value || null)}
+              className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-5 text-sm font-bold text-white appearance-none focus:outline-none focus:border-blue-600 transition-all cursor-pointer pr-12"
+            >
+              <option value="" className="bg-[#1A1C1E]">{lang === 'bn' ? 'প্রজেক্ট নির্বাচন করুন' : 'Select Project'}</option>
+              {runningProjects.map(p => (
+                <option key={p.id} value={p.id} className="bg-[#1A1C1E]">
+                  {getDisplayName(p.name)}
+                </option>
+              ))}
+            </select>
+            <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-white/40 group-hover:text-blue-400 transition-colors">
+              <ChevronDown size={20} />
+            </div>
+          </div>
+        </div>
+
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={selectedReportProjectId || 'all'}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.3 }}
+          >
+            {/* Project Summary Grid - ONLY show when a project is selected */}
+            {!isAllProjects && (
+              <div className="grid grid-cols-1 gap-4 mb-10">
+                <div className="md3-card-elevated mesh-blue p-6 flex flex-col items-center justify-center text-center relative overflow-hidden group">
+                  <div className="absolute top-0 left-0 w-full h-full bg-blue-600/5 group-hover:bg-blue-600/10 transition-colors pointer-events-none" />
+                  <div className="w-12 h-12 rounded-2xl bg-blue-600/20 flex items-center justify-center text-blue-400 mb-4">
+                    <Activity size={24} />
+                  </div>
+                  <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-white/40 mb-1">
+                    {lang === 'bn' ? 'প্রজেক্ট প্রফিট' : 'Project Profit'}
+                  </label>
+                  <h2 className={`text-4xl font-black ${profit >= 0 ? 'text-[#00FF41]' : 'text-[#E23636]'}`}>
+                    ৳ {profit.toLocaleString()}
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="md3-card mesh-green p-5 border border-white/5 relative overflow-hidden">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-8 h-8 rounded-lg bg-[#00FF41]/10 flex items-center justify-center text-[#00FF41]">
+                        <TrendingUp size={16} />
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">{t('income')}</span>
+                    </div>
+                    <p className="text-xl font-black text-[#00FF41]">৳ {income.toLocaleString()}</p>
+                  </div>
+                  <div className="md3-card mesh-red p-5 border border-white/5 relative overflow-hidden">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-8 h-8 rounded-lg bg-[#E23636]/10 flex items-center justify-center text-[#E23636]">
+                        <TrendingDown size={16} />
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">{t('expense')}</span>
+                    </div>
+                    <p className="text-xl font-black text-[#E23636]">৳ {expense.toLocaleString()}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isAllProjects ? (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between px-1">
+                  <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-white/60 flex items-center gap-2">
+                    <PieChart size={16} />
+                    {lang === 'bn' ? 'চলমান প্রজেক্টসমূহ' : 'Running Projects'}
+                  </h3>
+                  <span className="text-[10px] font-bold text-white/30 uppercase">{runningProjects.length} Projects</span>
+                </div>
+
+                
+                {projectStats.map((p, idx) => (
+                  <motion.div 
+                    key={p.id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: idx * 0.1 }}
+                    onClick={() => setSelectedReportProjectId(p.id)}
+                    className="md3-card p-6 border border-white/5 bg-gradient-to-br from-white/5 to-transparent relative overflow-hidden group cursor-pointer active:scale-[0.98] transition-all"
+                  >
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[40px] -mr-16 -mt-16 group-hover:bg-blue-500/10 transition-all" />
+                    
+                    <div className="flex justify-between items-start mb-6 relative z-10">
+                      <div>
+                        <h4 className="text-xl font-black text-white group-hover:text-blue-400 transition-colors">{getDisplayName(p.name)}</h4>
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                          <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">Running Status</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg ${p.profit >= 0 ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                          {p.income > 0 ? Math.round((p.profit / p.income) * 100) : 0}% Margin
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-2 relative z-10">
+                      <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">Income</p>
+                        <p className="text-xs font-black text-white">৳{p.income.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">Expense</p>
+                        <p className="text-xs font-black text-white">৳{p.expense.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">Net</p>
+                        <p className={`text-xs font-black ${p.profit >= 0 ? 'text-blue-400' : 'text-red-400'}`}>৳{Math.abs(p.profit).toLocaleString()}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-6 flex items-center justify-between">
+                      <div className="flex -space-x-2">
+                        {[1, 2, 3].map(i => (
+                          <div key={i} className="w-6 h-6 rounded-full border-2 border-[#1A1C1E] bg-white/10 flex items-center justify-center text-[8px] text-white/40 font-bold">
+                            U{i}
+                          </div>
+                        ))}
+                      </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedReportProjectId(p.id);
+                        }}
+                        className="px-5 py-2.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2 border border-blue-600/20 active:scale-95"
+                      >
+                        {lang === 'bn' ? 'বিস্তারিত দেখুন' : 'View Details'} <ArrowRight size={12} />
+                      </button>
+                    </div>
+                  </motion.div>
+                ))}
+
+              </div>
+            ) : (
+              <div className="space-y-12">
+                {/* Category Breakdown for Project */}
+                <div>
+                  <div className="flex items-center justify-between mb-8 px-1">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center text-blue-400">
+                        <PieChart size={20} />
+                      </div>
+                      {lang === 'bn' ? 'ব্যয়ের খাতসমূহ' : 'Spending Breakdown'}
+                    </h3>
+                    <div className="text-right">
+                      <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Total Transactions</p>
+                      <p className="text-sm font-black text-white">{relevantTx.length}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
+                    <DonutChart data={categories} total={expense} />
+                    
+                    <div className="space-y-6">
+                      {categories.length > 0 ? categories.map((cat, idx) => (
+                        <div key={cat.name} className="relative group">
+                          <div className="flex justify-between items-end mb-2 px-1">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-8 h-8 rounded-xl ${getCategoryColorClass(cat.name)}/10 flex items-center justify-center text-white/80`}>
+                                {getCategoryIcon(cat.name)}
+                              </div>
+                              <span className="text-xs font-bold text-white/80">{getDisplayName(cat.name)}</span>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-xs font-black text-white block">৳{cat.value.toLocaleString()}</span>
+                            </div>
+                          </div>
+                          <div className="h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${(cat.value / (expense || 1)) * 100}%` }}
+                              transition={{ duration: 1, delay: idx * 0.1 }}
+                              className={`h-full rounded-full ${getCategoryColorClass(cat.name)}`}
+                            />
+                          </div>
+                        </div>
+                      )) : (
+                        <div className="bg-white/2 border border-dashed border-white/10 rounded-3xl p-8 text-center">
+                          <p className="text-white/20 text-xs italic">No data</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Cash Flow Trend Chart */}
+                <div className="md3-card-elevated glass-panel p-6 border border-white/5">
+                  <div className="flex justify-between items-center mb-6">
+                    <div>
+                      <h3 className="text-sm font-black text-white uppercase tracking-widest">{lang === 'bn' ? 'ক্যাশ ফ্লো ট্রেন্ড' : 'Cash Flow Trend'}</h3>
+                      <p className="text-[10px] text-white/30 font-bold uppercase tracking-widest mt-1">{lang === 'bn' ? 'আয় বনাম ব্যয়' : 'Income vs Expense'}</p>
+                    </div>
+                    <div className="flex gap-4">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-[#00FF41]" />
+                        <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">Income</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-[#E23636]" />
+                        <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">Expense</span>
+                      </div>
+                    </div>
+                  </div>
+                  <AreaChart transactions={relevantTx} />
+                </div>
+
+                {/* Additional Insight Card */}
+                <div className="md3-card-elevated glass-panel p-6 border border-white/10 relative overflow-hidden">
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-blue-400">
+                      <Activity size={20} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">Project Health Insights</h4>
+                      <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">Real-time Analysis</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-white/60 leading-relaxed">
+                    Based on current data, your primary expense is <span className="text-white font-bold">{categories[0]?.name || 'N/A'}</span>. 
+                    The project has a <span className="text-blue-400 font-bold">{income > 0 ? Math.round((profit/income)*100) : 0}%</span> profit margin which is 
+                    <span className="text-[#00FF41] font-bold"> {profit >= 0 ? 'Optimal' : 'Needs Review'}</span>.
+                  </p>
+                </div>
+
+                {/* Project Ledger Section */}
+                <div className="space-y-8">
+                  <div className="flex items-center justify-between px-1">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-green-600/20 flex items-center justify-center text-green-400">
+                        <Calendar size={20} />
+                      </div>
+                      {lang === 'bn' ? 'লেনদেন লেজার' : 'Transaction Ledger'}
+                    </h3>
+                    <div className="relative group">
+                      <input 
+                        type="date"
+                        value={reportDateFilter}
+                        onChange={(e) => setReportDateFilter(e.target.value)}
+                        className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold text-white focus:outline-none focus:border-blue-500 transition-all uppercase"
+                      />
+                      {reportDateFilter && (
+                        <button 
+                          onClick={() => setReportDateFilter('')}
+                          className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-[8px] border-2 border-[#1A1C1E]"
+                        >
+                          <X size={10} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-10">
+                    {(() => {
+                      // Filter by selected date if exists
+                      let filteredTx = relevantTx;
+                      if (reportDateFilter) {
+                        filteredTx = relevantTx.filter(tx => 
+                          new Date(tx.created_at).toISOString().split('T')[0] === reportDateFilter
+                        );
+                      }
+
+                      // Group by Date
+                      const groups: Record<string, any[]> = {};
+                      filteredTx.forEach(tx => {
+                        const date = new Date(tx.created_at).toISOString().split('T')[0];
+                        if (!groups[date]) groups[date] = [];
+                        groups[date].push(tx);
+                      });
+
+                      const sortedDates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+                      const visibleDates = reportDateFilter ? sortedDates : sortedDates.slice(0, reportDaysLimit);
+
+                      if (visibleDates.length === 0) {
+                        return (
+                          <div className="bg-white/2 border border-dashed border-white/10 rounded-3xl p-12 text-center">
+                            <Calendar size={40} className="mx-auto mb-4 text-white/10" />
+                            <p className="text-white/20 text-xs italic">No transactions found for the selected period.</p>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <>
+                          {visibleDates.map((date) => (
+                            <div key={date} className="relative pl-6 border-l border-white/5 space-y-4">
+                              <div className="absolute -left-1.5 top-0 w-3 h-3 rounded-full bg-blue-600 border-4 border-[#1A1C1E] shadow-lg shadow-blue-600/20" />
+                              <h4 className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] mb-4">
+                                {new Date(date).toLocaleDateString(lang === 'bn' ? 'bn-BD' : 'en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                              </h4>
+                              
+                              <div className="grid grid-cols-1 gap-3">
+                                {groups[date].map((tx) => (
+                                  <div 
+                                    key={tx.id}
+                                    onClick={() => {
+                                      setSelectedTransaction(tx);
+                                      setShowTransactionDetails(true);
+                                    }}
+                                    className="md3-card-elevated glass-panel p-4 flex items-center justify-between border border-white/5 active:scale-[0.98] transition-all cursor-pointer group"
+                                  >
+                                    <div className="flex items-center gap-4">
+                                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${tx.type === 'income' ? 'bg-[#00FF41]/10 text-[#00FF41]' : 'bg-[#E23636]/10 text-[#E23636]'}`}>
+                                        {tx.type === 'income' ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
+                                      </div>
+                                      <div>
+                                        <p className="text-xs font-bold text-white group-hover:text-blue-400 transition-colors">{getDisplayName(tx.nature)}</p>
+                                        <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">{tx.category}</p>
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className={`text-sm font-black ${tx.type === 'income' ? 'text-[#00FF41]' : 'text-white'}`}>
+                                        {tx.type === 'income' ? '+' : '-'} ৳ {tx.amount.toLocaleString()}
+                                      </p>
+                                      <p className="text-[8px] text-white/20 font-bold uppercase">{tx.time}</p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+
+                          {!reportDateFilter && sortedDates.length > reportDaysLimit && (
+                            <button 
+                              onClick={() => setReportDaysLimit(prev => prev + 7)}
+                              className="w-full py-4 bg-white/5 hover:bg-white/10 text-white/40 rounded-2xl text-[10px] font-bold uppercase tracking-[0.3em] active:scale-[0.98] transition-all border border-white/5 flex items-center justify-center gap-2"
+                            >
+                              <Plus size={14} /> {lang === 'bn' ? 'আরও দেখুন' : 'Show More (Next 7 Days)'}
+                            </button>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+
+                <button 
+                  onClick={() => setSelectedReportProjectId(null)}
+                  className="w-full py-5 bg-white/5 hover:bg-white/10 text-white/40 rounded-3xl text-[10px] font-bold uppercase tracking-[0.3em] active:scale-[0.98] transition-all border border-white/5"
+                >
+                  ← {lang === 'bn' ? 'প্রজেক্ট লিস্টে ফিরে যান' : 'Back to All Projects'}
+                </button>
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    );
+  };
+
 
 
 
@@ -1535,6 +2014,53 @@ export default function Dashboard() {
           </header>
           {renderReports()}
         </>
+      ) : activeTab === 'projects' ? (
+        <>
+          <header className="px-6 pt-8 pb-4 flex justify-between items-center">
+            <h1 className="text-2xl font-semibold tracking-tight text-white">{t('projects')}</h1>
+            <div className="flex gap-2">
+              {userRole === 'contractor' && (
+                <button 
+                  onClick={() => setShowProjectModal(true)}
+                  className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-green-400 hover:bg-green-500/10 transition-colors"
+                >
+                  <Plus size={20} />
+                </button>
+              )}
+              <button 
+                onClick={() => setLang(lang === 'bn' ? 'en' : 'bn')}
+                className="px-3 py-1 rounded-full bg-white/10 text-[10px] font-bold uppercase tracking-widest hover:bg-white/20 transition-colors"
+              >
+                {lang === 'bn' ? 'English' : 'বাংলা'}
+              </button>
+            </div>
+          </header>
+          {renderProjects()}
+        </>
+      ) : activeTab === 'settings' ? (
+        <>
+          <header className="px-6 pt-8 pb-4">
+            <h1 className="text-2xl font-semibold tracking-tight text-white">{t('settings')}</h1>
+          </header>
+          
+          <div className="px-6 space-y-6">
+            <div className="md3-card-elevated p-6 border border-white/5 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[40px] -mr-16 -mt-16" />
+              
+              <h3 className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] mb-4 relative z-10">Account</h3>
+              <p className="text-sm text-white/60 mb-6 relative z-10 leading-relaxed">
+                You are currently logged in as <strong>Dev Admin</strong>.
+              </p>
+              
+              <button 
+                onClick={handleLogout}
+                className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-red-500 font-bold uppercase tracking-widest flex items-center justify-center gap-3 relative z-10"
+              >
+                <LogOut size={20} /> {lang === 'bn' ? 'লগ আউট' : 'Sign Out'}
+              </button>
+            </div>
+          </div>
+        </>
       ) : null}
 
       {/* Bottom Nav (Mobile Only) */}
@@ -1550,7 +2076,7 @@ export default function Dashboard() {
           onClick={() => setActiveTab('projects')}
           className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'projects' ? 'text-blue-400 scale-110' : 'opacity-50 text-white'}`}
         >
-          <Wallet size={22} />
+          <Briefcase size={22} />
           <span className="text-[10px]">{t('projects')}</span>
         </button>
         <button 

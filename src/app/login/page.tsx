@@ -13,8 +13,13 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   
-  const supabase = createClient();
   const router = useRouter();
+  const supabase = createClient();
+
+  // Redirect automatically while login verification is disabled
+  React.useEffect(() => {
+    router.push('/');
+  }, [router]);
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();

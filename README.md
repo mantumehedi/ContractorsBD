@@ -4,40 +4,33 @@ Premium, project-based financial management app tailored for Bangladesh construc
 
 ## 🚀 Key Features
 - **Vibrant Field Mode UI:** High-contrast design (Matrix Green/Spiderman Red) with **Sticky Action Bar** for site-speed entry.
-- **Advanced RBAC System:** Context-specific roles (Contractor/Owner vs. Site Manager) with secure Row Level Security (RLS).
-- **Frictionless Invitations:** Invite Site Managers by email—even if they haven't signed up yet—via a deferred invitation system.
-- **Persistent Backend:** Full Supabase integration for projects, transactions, and vendors.
-- **Reactive Ledger:** Live-updating transaction history with **Bilingual Search** (English/Bengali).
+- **Reports UI/UX Overhaul**: Replaced global aggregate views with a project-centric navigation system and a premium dropdown selector.
+- **High-Fidelity Analytics**: Integrated interactive **Donut Charts** (Expense Breakdown) and **Area Charts** (Cash Flow Trend) using SVG and Framer Motion.
+- **Operational separation**: Clearly distinguished the **Projects** tab (Operational Hub) and the **Reports** tab (Financial Hub).
+- **Date-Grouped Ledger**: Implemented a transactional ledger with calendar filtering and 7-day pagination logic.
+- **Data Seeding**: Populated a comprehensive demo environment with 10 projects and 200+ transactions.
+- **Development Auth Bypass**: Temporary guest access enabled for rapid UI verification.
 - **Bilingual & Localized:** Seamless switching with **Optimized Typography** and persistent translation caching.
-- **Project-Wise Analytics:** Animated spending breakdown charts and project efficiency comparisons in the **Reports** tab.
 - **PDF Export System:** Professional A4 voucher/memo generation with embedded voucher images.
-- **Voucher Accountability:** Real-time photo uploads and management for every ledger entry via Supabase Storage.
-- **Full CRUD Ledger:** Edit and Delete existing transactions with real-time stats updates.
 
 ## 🛠️ Tech Stack
 - **Framework:** Next.js (App Router)
 - **Backend:** Supabase (@supabase/ssr)
-- **Storage:** Supabase Storage (Voucher Bucket)
 - **PDF Engine:** jsPDF + html2canvas
 - **Auth:** Email OTP with Custom Gmail SMTP
-- **Styling:** Tailwind CSS / Custom MD3 Utility Classes
-- **State:** React Hooks & Supabase Client
-- **Icons:** Lucide React
 - **Animations:** Framer Motion
+- **Icons:** Lucide React
 
 ## 📈 Project Status & Roadmap
 For a detailed technical breakdown, see [HANDOFF.md](./HANDOFF.md).
 
-**Current Milestone:** ✅ Accounting CRUD, PDF Export & Storage Complete
-**Next Up:** 🏗️ Reports UI/UX Refinement & Project Archiving
-
+**Current Milestone:** ✅ Analytical Dashboard & Operational Hub Separation Complete
+**Next Up:** 🏗️ Project Archiving Logic & Audit Logs
 
 ## ⚡ Quick Start
 1. `npm install`
 2. Configure `.env.local` with your Supabase credentials.
-3. Configure Gmail SMTP in Supabase Auth settings for reliable OTP delivery.
-4. Run the SQL schema from the latest migration script (found in `HANDOFF.md` history).
-5. `npm run dev`
+3. `npm run dev`
 
 ---
 *Created by Antigravity for ContractorsBD*
