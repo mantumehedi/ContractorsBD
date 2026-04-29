@@ -191,7 +191,7 @@ export default function Dashboard() {
       const { data: { user: authUser } } = await supabase.auth.getUser();
       
       const mockUser = authUser || { 
-        id: '00000000-0000-0000-0000-000000000000', 
+        id: 'f50c7397-9d6c-4a89-b63f-ec3aae3c1d07', 
         email: 'dev@contractorsbd.com',
         user_metadata: { full_name: 'Dev Admin' }
       };
@@ -223,6 +223,11 @@ export default function Dashboard() {
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [isEditProjectMode, setIsEditProjectMode] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [projectMembers, setProjectMembers] = useState<any[]>([]);
+  const [projectInvitations, setProjectInvitations] = useState<any[]>([]);
+  const [isTeamLoading, setIsTeamLoading] = useState(false);
 
   const uploadVoucher = async (file: File) => {
     if (!user) return null;
@@ -290,8 +295,6 @@ export default function Dashboard() {
 
 
   const fetchInitialData = async () => {
-
-
     setIsLoading(true);
     try {
       // Fetch Projects (RLS handles filtering)
@@ -386,6 +389,86 @@ export default function Dashboard() {
       setShowTransactionDetails(false);
       fetchInitialData();
     }
+  };
+
+  const handleProjectStatusChange = async (projectId: string, newStatus: string) => {
+    const statusLabel = lang === 'bn' 
+      ? (newStatus === 'running' ? 'চলমান' : newStatus === 'completed' ? 'সম্পন্ন' : 'আর্কাইভ')
+      : newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+      
+    if (!window.confirm(`${t('confirm_status_change')} ${statusLabel}?`)) return;
+
+    const { error } = await supabase
+      .from('projects')
+      .update({ status: newStatus })
+      .eq('id', projectId);
+
+    if (error) {
+      alert('Error updating status: ' + error.message);
+    } else {
+      fetchInitialData();
+    }
+  };
+
+  const handleEditProjectClick = (project: any) => {
+    setIsEditProjectMode(true);
+    setEditingProjectId(project.id);
+    setNewProjectName(project.name);
+    setShowProjectModal(true);
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    const confirmMsg = lang === 'bn' 
+      ? 'আপনি কি নিশ্চিতভাবে এই প্রজেক্টটি ডিলিট করতে চান? এর সাথে সম্পর্কিত সকল লেনদেনও ডিলিট হয়ে যাবে।' 
+      : 'Are you sure you want to delete this project? All associated transactions will also be deleted.';
+    
+    if (!window.confirm(confirmMsg)) return;
+
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', projectId);
+
+    if (error) {
+      alert('Error deleting project: ' + error.message);
+    } else {
+      alert(lang === 'bn' ? 'প্রজেক্ট ডিলিট করা হয়েছে' : 'Project deleted successfully');
+      setShowProjectModal(false);
+      setIsEditProjectMode(false);
+      setNewProjectName('');
+      fetchInitialData();
+    }
+  };
+
+  const fetchTeamData = async (projectId: string) => {
+    setIsTeamLoading(true);
+    // Fetch members with profile info
+    const { data: members } = await supabase
+      .from('project_members')
+      .select('id, user_id, role, profiles(email, full_name)')
+      .eq('project_id', projectId);
+    
+    // Fetch invitations
+    const { data: invites } = await supabase
+      .from('invitations')
+      .select('*')
+      .eq('project_id', projectId);
+      
+    setProjectMembers(members || []);
+    setProjectInvitations(invites || []);
+    setIsTeamLoading(false);
+  };
+
+  const handleRemoveMember = async (memberId: string) => {
+    if (!window.confirm(lang === 'bn' ? 'আপনি কি এই সদস্যকে রিমুভ করতে চান?' : 'Remove this member?')) return;
+    const { error } = await supabase.from('project_members').delete().eq('id', memberId);
+    if (!error) fetchTeamData(inviteProject);
+  };
+
+  const handleCancelInvite = async (inviteId: string) => {
+    if (!window.confirm(lang === 'bn' ? 'ইনভিটেশন বাতিল করবেন?' : 'Cancel invitation?')) return;
+    const { error } = await supabase.from('invitations').delete().eq('id', inviteId);
+    if (!error) fetchTeamData(inviteProject);
   };
 
   const handleEditClick = (tx: any) => {
@@ -637,9 +720,9 @@ export default function Dashboard() {
         </div>
 
         {/* Project Cards */}
-        <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4 md:gap-6">
           {filtered.length > 0 ? filtered.map((p) => (
-            <div key={p.id} className="md3-card-elevated p-6 border border-white/5 relative overflow-hidden group">
+            <div key={p.id} className="md3-card-elevated p-4 md:p-6 border border-white/5 relative overflow-hidden group flex flex-col h-full">
               <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[40px] -mr-16 -mt-16 group-hover:bg-blue-500/10 transition-all" />
               
               <div className="flex justify-between items-start mb-4 relative z-10">
@@ -671,16 +754,57 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="mt-8 flex gap-3 relative z-10">
-                <button 
-                  onClick={() => setShowTeamModal(true)}
-                  className="flex-1 py-3.5 bg-white/5 hover:bg-white/10 text-white/80 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-white/5 flex items-center justify-center gap-2"
-                >
-                  <Users size={14} /> {lang === 'bn' ? 'টিম ম্যানেজ' : 'Manage Team'}
-                </button>
-                <button className="px-5 py-3.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-blue-600/20 flex items-center justify-center gap-2">
-                  <Edit2 size={14} /> {lang === 'bn' ? 'এডিট' : 'Edit Info'}
-                </button>
+              <div className="mt-auto pt-8 flex flex-col gap-3 relative z-10">
+                <div className="flex gap-3">
+                   {projectSubTab === 'running' ? (
+                     <button 
+                       onClick={() => handleProjectStatusChange(p.id, 'completed')}
+                       className="flex-1 py-3.5 bg-green-600/10 hover:bg-green-600/20 text-green-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-green-600/20 flex items-center justify-center gap-2"
+                     >
+                       <Check size={14} /> {t('mark_completed')}
+                     </button>
+                   ) : projectSubTab === 'completed' ? (
+                     <>
+                       <button 
+                         onClick={() => handleProjectStatusChange(p.id, 'archived')}
+                         className="flex-1 py-3.5 bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-red-600/20 flex items-center justify-center gap-2"
+                       >
+                         <Trash2 size={14} /> {t('mark_archived')}
+                       </button>
+                       <button 
+                         onClick={() => handleProjectStatusChange(p.id, 'running')}
+                         className="flex-1 py-3.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-blue-600/20 flex items-center justify-center gap-2"
+                       >
+                         <Activity size={14} /> {t('reopen')}
+                       </button>
+                     </>
+                   ) : (
+                     <button 
+                       onClick={() => handleProjectStatusChange(p.id, 'running')}
+                       className="flex-1 py-3.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-blue-600/20 flex items-center justify-center gap-2"
+                     >
+                       <Activity size={14} /> {t('reopen')}
+                     </button>
+                   )}
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => {
+                      setInviteProject(p.id);
+                      setShowTeamModal(true);
+                      fetchTeamData(p.id);
+                    }}
+                    className="flex-1 py-3.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-blue-600/20 flex items-center justify-center gap-2"
+                  >
+                    <Users size={14} /> {lang === 'bn' ? 'টিম ম্যানেজ' : 'Manage Team'}
+                  </button>
+                  <button 
+                    onClick={() => handleEditProjectClick(p)}
+                    className="flex-1 py-3.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-blue-600/20 flex items-center justify-center gap-2"
+                  >
+                    <Edit2 size={14} /> {lang === 'bn' ? 'এডিট' : 'Edit Info'}
+                  </button>
+                </div>
               </div>
             </div>
           )) : (
@@ -1157,7 +1281,14 @@ export default function Dashboard() {
       voucher_no: { bn: 'ভাউচার নং', en: 'Voucher No' },
       prepared_by: { bn: 'প্রস্তুতকারী', en: 'Prepared By' },
       signature: { bn: 'স্বাক্ষর', en: 'Signature' },
-      authorized: { bn: 'অনুমোদিত স্বাক্ষর', en: 'Authorized Signature' }
+      authorized: { bn: 'অনুমোদিত স্বাক্ষর', en: 'Authorized Signature' },
+      
+      // Project Status Actions
+      mark_completed: { bn: 'কাজ শেষ করুন', en: 'Mark Completed' },
+      mark_archived: { bn: 'আর্কাইভ করুন', en: 'Archive' },
+      reopen: { bn: 'পুনরায় খুলুন', en: 'Reopen' },
+      restore: { bn: 'আগের অবস্থায় আনুন', en: 'Restore' },
+      confirm_status_change: { bn: 'আপনি কি নিশ্চিতভাবে স্ট্যাটাস পরিবর্তন করতে চান:', en: 'Are you sure you want to change status to:' }
     };
 
 
@@ -1895,7 +2026,9 @@ export default function Dashboard() {
                           unit: selectedUnit,
                           quantity: parseFloat(quantity),
                           description: description,
-                          voucher_url: vUrl || voucherPreview
+                          voucher_url: vUrl || voucherPreview,
+                          created_by: user?.id,
+                          updated_by: user?.id
                         };
 
                         const { error } = isEditMode
@@ -2409,7 +2542,9 @@ export default function Dashboard() {
                           payment_method: paymentMethod,
                           ref_no: refNo,
                           description: description,
-                          voucher_url: vUrl || voucherPreview
+                          voucher_url: vUrl || voucherPreview,
+                          created_by: user?.id,
+                          updated_by: user?.id
                         };
 
                         const { error } = isEditMode
@@ -2535,9 +2670,8 @@ export default function Dashboard() {
                         else alert(memberError.message);
                       } else {
                         alert('Site Manager assigned successfully!');
-                        setShowTeamModal(false);
                         setInviteEmail('');
-                        setInviteProject('');
+                        fetchTeamData(inviteProject);
                       }
                     } else {
                       // Case B: User doesn't exist yet -> Add to invitations
@@ -2554,10 +2688,9 @@ export default function Dashboard() {
                         if (inviteError.code === '23505') alert('An invitation is already pending for this email.');
                         else alert(inviteError.message);
                       } else {
-                        alert('Invitation sent! Once they log in with this email, they will automatically see the project.');
-                        setShowTeamModal(false);
+                        alert('Invitation sent!');
                         setInviteEmail('');
-                        setInviteProject('');
+                        fetchTeamData(inviteProject);
                       }
                     }
                     setIsInviting(false);
@@ -2567,6 +2700,49 @@ export default function Dashboard() {
                 >
                   {isInviting ? <Loader2 className="animate-spin" size={24} /> : 'Assign Site Manager'}
                 </button>
+
+                {/* Team List */}
+                <div className="pt-6 border-t border-white/10 mt-6">
+                  <h3 className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-4 px-1">{lang === 'bn' ? 'বর্তমান টিম' : 'Current Team'}</h3>
+                  
+                  {isTeamLoading ? (
+                    <div className="py-8 flex justify-center"><Loader2 className="animate-spin text-white/20" /></div>
+                  ) : (
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
+                      {projectMembers.map(m => (
+                        <div key={m.id} className="bg-white/5 rounded-2xl p-4 flex justify-between items-center group">
+                          <div>
+                            <p className="text-xs font-bold text-white">{m.profiles?.full_name || 'Site Manager'}</p>
+                            <p className="text-[10px] text-white/40">{m.profiles?.email}</p>
+                          </div>
+                          <button 
+                            onClick={() => handleRemoveMember(m.id)}
+                            className="w-8 h-8 rounded-full bg-red-600/10 text-red-400 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all active:scale-90"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      {projectInvitations.map(inv => (
+                        <div key={inv.id} className="bg-white/5 border border-dashed border-white/10 rounded-2xl p-4 flex justify-between items-center group">
+                          <div>
+                            <p className="text-xs font-bold text-white/60">{inv.email}</p>
+                            <p className="text-[8px] uppercase tracking-widest text-blue-400 font-bold">Pending Invite</p>
+                          </div>
+                          <button 
+                            onClick={() => handleCancelInvite(inv.id)}
+                            className="w-8 h-8 rounded-full bg-red-600/10 text-red-400 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all active:scale-90"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      {projectMembers.length === 0 && projectInvitations.length === 0 && (
+                        <div className="text-center py-8 text-white/20 text-[10px] uppercase font-bold tracking-widest">No members assigned</div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </motion.div>
           </>
@@ -2592,11 +2768,18 @@ export default function Dashboard() {
               <div className="flex justify-between items-center mb-8">
                 <h2 className="text-xl font-bold text-white flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-green-600/20 flex items-center justify-center text-green-400">
-                    <FolderPlus size={20} />
+                    {isEditProjectMode ? <Edit2 size={20} /> : <FolderPlus size={20} />}
                   </div>
-                  New Project
+                  {isEditProjectMode ? (lang === 'bn' ? 'প্রজেক্ট এডিট' : 'Edit Project') : (lang === 'bn' ? 'নতুন প্রজেক্ট' : 'New Project')}
                 </h2>
-                <button onClick={() => setShowProjectModal(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/40">
+                <button 
+                  onClick={() => {
+                    setShowProjectModal(false);
+                    setIsEditProjectMode(false);
+                    setNewProjectName('');
+                  }} 
+                  className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/40"
+                >
                   <X size={20} />
                 </button>
               </div>
@@ -2618,29 +2801,55 @@ export default function Dashboard() {
                     if (!newProjectName.trim() || !user) return;
                     setIsCreatingProject(true);
                     
-                    const { error } = await supabase
-                      .from('projects')
-                      .insert({
-                        name: newProjectName.trim(),
-                        owner_id: user.id,
-                        status: 'running'
-                      });
+                    if (isEditProjectMode && editingProjectId) {
+                      const { error } = await supabase
+                        .from('projects')
+                        .update({ name: newProjectName.trim() })
+                        .eq('id', editingProjectId);
 
-                    if (error) {
-                      alert(error.message);
+                      if (error) {
+                        alert(error.message);
+                      } else {
+                        alert('Project updated successfully!');
+                        setShowProjectModal(false);
+                        setIsEditProjectMode(false);
+                        setNewProjectName('');
+                        fetchInitialData();
+                      }
                     } else {
-                      alert('Project created successfully!');
-                      setShowProjectModal(false);
-                      setNewProjectName('');
-                      fetchInitialData();
+                      const { error } = await supabase
+                        .from('projects')
+                        .insert({
+                          name: newProjectName.trim(),
+                          owner_id: user.id,
+                          status: 'running'
+                        });
+
+                      if (error) {
+                        alert(error.message);
+                      } else {
+                        alert('Project created successfully!');
+                        setShowProjectModal(false);
+                        setNewProjectName('');
+                        fetchInitialData();
+                      }
                     }
                     setIsCreatingProject(false);
                   }}
                   disabled={isCreatingProject}
                   className="w-full bg-[#00FF41] py-5 rounded-2xl text-black font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-50"
                 >
-                  {isCreatingProject ? <Loader2 className="animate-spin" size={24} /> : 'Create Project'}
+                  {isCreatingProject ? <Loader2 className="animate-spin" size={24} /> : (isEditProjectMode ? (lang === 'bn' ? 'আপডেট করুন' : 'Update Project') : (lang === 'bn' ? 'তৈরি করুন' : 'Create Project'))}
                 </button>
+
+                {isEditProjectMode && (
+                  <button 
+                    onClick={() => handleDeleteProject(editingProjectId!)}
+                    className="w-full py-4 text-red-500/60 hover:text-red-500 text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 mt-4"
+                  >
+                    <Trash2 size={14} /> {lang === 'bn' ? 'প্রজেক্ট ডিলিট করুন' : 'Delete Project'}
+                  </button>
+                )}
               </div>
             </motion.div>
           </>

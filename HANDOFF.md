@@ -7,36 +7,32 @@ The application uses a high-vibrancy design system optimized for outdoor visibil
 - **Profit/Loss:** Royal Blue (`#4169E1`) with **White Text**.
 
 ## 🛠️ Module Status
-- **Database (Supabase):** ✅ Complete. 
-    - Schema includes `projects`, `transactions`, `vendors_payees`, `translations`, `profiles`, `project_members`, and `invitations`.
-    - **New**: Seeded with 10 projects and 200+ transactions for immediate demo use.
-- **Auth & RBAC:** ✅ Stable (Development Bypass Active).
-    - Temporary auto-login as "Dev Admin" enabled for rapid testing.
-    - Role system: Contractor (Owner) vs. Site Manager (Member) logic verified.
-- **Analytics:** ✅ High-Fidelity. 
-    - **Donut Chart**: Categorical expense breakdown.
-    - **Area Chart**: Cumulative Cash Flow trend (Income vs. Expense).
-    - **Health Insights**: Automated project status analysis based on profit margins.
-- **Hub Separation:** ✅ Complete.
-    - **Projects Page**: Operational Site Management (Team, Status).
-    - **Reports Page**: Financial Auditing (Ledger, Analytics).
+- **Operational Hub (Projects):** ✅ Complete. 
+    - **Lifecycle**: Full transitions (Running, Completed, Archived).
+    - **CRUD**: Rename and Delete projects (with confirmation).
+    - **Density**: 2-column grid layout enforced for all screen sizes.
+- **Team Management:** ✅ Complete.
+    - Active Site Manager list with **Remove** functionality.
+    - Pending Invitation tracking and **Cancel** functionality.
+- **Financial Hub (Reports):** ✅ Complete. 
+    - **Analytics**: Donut (Breakdown) and Area (Cash Flow) charts.
+    - **Ledger**: Date-grouped entries with project-specific filtering.
+- **Audit Logs:** ✅ Complete. Tracks `created_by` and `updated_by` for all transactions.
 - **PDF & Exports:** ✅ Complete. Professional voucher generation (A4) with image embedding.
-- **Storage:** ✅ Complete. Image uploads for vouchers supported in ledger entries.
+- **Auth & RBAC:** ✅ Stable (Development Bypass Active).
+    - **New**: Dev ID updated to `f50c7397...` to match seeded project ownership for RLS testing.
 
 ## 🚀 Immediate Next Steps
-1.  **Project Archiving Logic:** Implement status transitions in the Projects tab.
-2.  **Audit Logs:** Track who created/edited transactions.
-3.  **Restore Auth:** Remove the guest bypass in `login/page.tsx` and `page.tsx`.
+1.  **Auth Restoration:** Re-enable Email OTP and remove guest bypass in `page.tsx`.
+2.  **User Onboarding:** Verify Site Manager project-access logic with real user accounts.
+3.  **Performance Polish:** Monitor heavy chart rendering on lower-end mobile devices.
 
 ## ⚠️ Technical Notes
-- **Charts:** Custom SVG components using `framer-motion` for zero-dependency performance.
-- **PDF Rendering:** `html2canvas` is sensitive to CSS colors in Tailwind 4. Use static HEX codes.
-- **Auth Bypass:** Controlled via `checkUser` function in `src/app/page.tsx` and `login/page.tsx`.
+- **Grid Layout:** Enforced `grid-cols-2` on all screens; ensure project names are kept reasonably short for best appearance.
+- **Cascading Deletes:** Project deletion is handled by Supabase (ON DELETE CASCADE) to clean up related transactions.
 
 ---
-*Last Session Summary: 2026-04-29*
-- **Reports UI Overhaul**: Implemented project-centric navigation and date-grouped transaction ledgers.
-- **High-Fidelity Analytics**: Added interactive Donut and Area charts for project-level financial auditing.
-- **Operational Separation**: Distinguished the "Field Hub" (Projects) from the "Financial Hub" (Reports).
-- **Data Seeding**: Populated a rich demo environment with 200+ transactions across 10 projects.
-- **Auth Bypass**: Enabled a temporary developer guest session for rapid verification.
+*Last Session Summary: 2026-04-30*
+- **Operational Completeness**: Implemented Archiving, Project CRUD, and Team Management.
+- **Audit Trail**: Enabled transaction-level owner tracking.
+- **UI Finalization**: achieved ultra-dense 2-column project grid.
