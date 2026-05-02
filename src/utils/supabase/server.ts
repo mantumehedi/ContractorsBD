@@ -6,8 +6,8 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEX
 
 export const createClient = (cookieStore: Awaited<ReturnType<typeof cookies>>) => {
   return createServerClient(
-    supabaseUrl!,
-    supabaseKey!,
+    supabaseUrl || "https://placeholder.supabase.co",
+    supabaseKey || "placeholder-key",
     {
       cookies: {
         getAll() {
