@@ -13,20 +13,20 @@
   --color-md-secondary: #BBC7DB;
   --color-md-on-secondary: #253140;
   
-  --color-md-surface: #1A1C1E;
+  --color-md-surface: #0F172A;
   --color-md-surface-variant: #43474E;
   --color-md-on-surface: #E2E2E6;
   --color-md-on-surface-variant: #C3C7CF;
   
   /* Accounting Accents (Vibrant Mode) */
-  --color-income: #00FF41; /* Matrix Green */
-  --color-expense: #E23636; /* Spiderman Red */
-  --color-profit: #4169E1; /* Royal Blue */
+  --color-income: #10B981; /* Vibrant Emerald */
+  --color-expense: #F43F5E; /* Soft Crimson */
+  --color-profit: #3B82F6; /* Royal Blue */
 
   
   /* Attention Colors */
-  --color-matrix-green: #00FF41;
-  --color-spiderman-red: #E23636;
+  --color-matrix-green: #10B981;
+  --color-spiderman-red: #F43F5E;
 
   
   /* Category Specific Colors */
@@ -40,8 +40,8 @@
 }
 
 :root {
-  --background: #1A1C1E; /* MD3 Dark Surface */
-  --foreground: #E2E2E6;
+  --background: #0F172A; /* Deep Navy Base */
+  --foreground: #F8FAFC;
 }
 
 body {
@@ -54,23 +54,23 @@ body {
 
 /* Material 3 Card Styles */
 .md3-card {
-  background: #2D2F31; /* Surface Container */
-  border-radius: 1.75rem; /* 28px - Extra Large */
+  background: #1E293B; /* Slightly lighter navy surface */
+  border-radius: 1.75rem; 
   padding: 1.5rem;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .md3-card-elevated {
-  background: #2D2F31;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  background: #1E293B;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
   border-radius: 1.75rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 /* Glassmorphism Effect */
 .glass-panel {
-  background: rgba(45, 47, 49, 0.7);
+  background: rgba(30, 41, 59, 0.7);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -84,12 +84,12 @@ body {
 
 .mesh-green {
   background: radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.15) 0px, transparent 50%),
-              radial-gradient(at 100% 0%, rgba(5, 150, 105, 0.1) 0px, transparent 50%);
+              radial-gradient(at 100% 0%, rgba(16, 185, 129, 0.1) 0px, transparent 50%);
 }
 
 .mesh-red {
-  background: radial-gradient(at 0% 0%, rgba(239, 68, 68, 0.15) 0px, transparent 50%),
-              radial-gradient(at 100% 0%, rgba(220, 38, 38, 0.1) 0px, transparent 50%);
+  background: radial-gradient(at 0% 0%, rgba(244, 63, 94, 0.15) 0px, transparent 50%),
+              radial-gradient(at 100% 0%, rgba(244, 63, 94, 0.1) 0px, transparent 50%);
 }
 
 /* MD3 Buttons */
@@ -105,9 +105,9 @@ body {
 }
 
 /* Vibrant Solid Cards */
-.bg-income-container { background-color: #00FF41 !important; color: #000000 !important; }
-.bg-expense-container { background-color: #E23636 !important; color: #FFFFFF !important; }
-.bg-profit-container { background-color: #4169E1 !important; color: #FFFFFF !important; }
+.bg-income-container { background-color: #10B981 !important; color: #FFFFFF !important; }
+.bg-expense-container { background-color: #F43F5E !important; color: #FFFFFF !important; }
+.bg-profit-container { background-color: #3B82F6 !important; color: #FFFFFF !important; }
 
 .profit-gradient {
   background: linear-gradient(135deg, #0284c7 0%, #0ea5e9 100%);

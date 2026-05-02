@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@/utils/supabase/client';
 const supabase = createClient();
 import jsPDF from 'jspdf';
@@ -57,6 +57,7 @@ import { useRouter } from 'next/navigation';
 
 
 export default function Dashboard() {
+  const dateInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [dbProjects, setDbProjects] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -98,19 +99,75 @@ export default function Dashboard() {
   const [dynamicTranslations, setDynamicTranslations] = useState<Record<string, string>>({});
 
 
-  // Helper to get bilingual display name
+  // Helper to detect if text is Bengali
+  const isBengali = (text: string) => /[৳-৿]/.test(text);
+
+  // Dynamic Translation & Persistence Utility
+  const ensureBilingual = async (text: string) => {
+    if (!text || !text.trim()) return text;
+    const trimmed = text.trim();
+    
+    // 1. Check local static dictionary
+    if (DATA_TRANSLATIONS[trimmed]) return trimmed;
+
+    // 2. Check if already in dynamic translations (state)
+    const existingKey = Object.keys(dynamicTranslations).find(key => 
+      key.toLowerCase() === trimmed.toLowerCase() || 
+      dynamicTranslations[key].toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existingKey) return existingKey;
+
+    // 3. Not found, translate via API
+    setIsTranslating(true);
+    const sourceLang = isBengali(trimmed) ? 'bn' : 'en';
+    const targetLang = sourceLang === 'bn' ? 'en' : 'bn';
+    
+    try {
+      const translated = await translateDynamic(trimmed, sourceLang, targetLang);
+      const en = sourceLang === 'en' ? trimmed : translated;
+      const bn = sourceLang === 'bn' ? trimmed : translated;
+
+      // 4. Persist to DB
+      await supabase.from('translations').upsert({
+        key: en,
+        en: en,
+        bn: bn
+      });
+
+      // 5. Update local state for immediate use
+      setDynamicTranslations(prev => ({ ...prev, [en]: bn }));
+      setIsTranslating(false);
+      return en; // Return English as canonical key
+    } catch (err) {
+      console.error("Translation failed:", err);
+      setIsTranslating(false);
+      return trimmed;
+    }
+  };
+
+  // Helper to get bilingual display name (Bidirectional)
   const getDisplayName = (val: string) => {
+    if (!val) return val;
+    
     // 1. Check static local dictionary first
     if (DATA_TRANSLATIONS[val]) {
       return DATA_TRANSLATIONS[val][lang];
     }
 
-    // 2. Check dynamic translations from API
+    // 2. Check dynamic translations
     if (lang === 'bn') {
-      return dynamicTranslations[val] || val;
+      // If we want Bengali, check if val is an English key
+      if (dynamicTranslations[val]) return dynamicTranslations[val];
+      // If val is already Bengali, just return it
+      else if (isBengali(val)) return val;
+      return val;
     } else {
+      // If we want English, check if val is a Bengali value in our map
       const enKey = Object.keys(dynamicTranslations).find(key => dynamicTranslations[key] === val);
-      return enKey || val;
+      if (enKey) return enKey;
+      // If val is already English, just return it
+      else if (!isBengali(val)) return val;
+      return val;
     }
   };
 
@@ -161,6 +218,9 @@ export default function Dashboard() {
   // Bilingual Logic
   const [lang, setLang] = useState<'bn' | 'en'>('bn');
   const [searchQuery, setSearchQuery] = useState('');
+  const [appliedSearchQuery, setAppliedSearchQuery] = useState('');
+  const [dashboardDateFilter, setDashboardDateFilter] = useState('');
+  const [visibleCount, setVisibleCount] = useState(10);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [showTransactionDetails, setShowTransactionDetails] = useState(false);
   const [description, setDescription] = useState('');
@@ -356,15 +416,51 @@ export default function Dashboard() {
       
       if (transError) throw transError;
       const transMap: Record<string, string> = {};
+      
+      // Load from dedicated translations table
       transData?.forEach(t => {
-        // Map based on current language or just store both?
-        // Let's store as key: translation based on context
-        // Actually, dynamicTranslations state stores [key]: bn_value if in BN mode? 
-        // No, getDisplayName checks dynamicTranslations[val] || val.
-        // Let's store [original_text]: Bengali_translation.
         if (t.bn) transMap[t.key] = t.bn;
       });
+
+      // Solution 2: Also extract from denormalized columns for zero-latency
+      projectsData?.forEach(p => {
+        if (p.name_en && p.name_bn) transMap[p.name_en] = p.name_bn;
+      });
+      txData?.forEach(tx => {
+        if (tx.nature_en && tx.nature_bn) transMap[tx.nature_en] = tx.nature_bn;
+        if (tx.category_en && tx.category_bn) transMap[tx.category_en] = tx.category_bn;
+      });
+
       setDynamicTranslations(transMap);
+
+      // Solution 1: Non-blocking background sync for missing translations
+      setTimeout(() => {
+        // 1. Check Projects
+        if (projectsData) {
+          const missingProjects = projectsData.filter(p => !transMap[p.name] && !DATA_TRANSLATIONS[p.name]);
+          missingProjects.forEach(async (p) => await ensureBilingual(p.name));
+        }
+
+        // 2. Check Transactions (Nature, Category, Subcategory)
+        if (txData) {
+          const uniqueNatures = Array.from(new Set(txData.map(tx => tx.nature)));
+          const missingNatures = uniqueNatures.filter(n => n && !transMap[n] && !DATA_TRANSLATIONS[n]);
+          missingNatures.forEach(async (n) => await ensureBilingual(n));
+        }
+        // 3. Check Vendors & Payees from Vendors table
+        if (vendorData) {
+          const uniqueVendors = Array.from(new Set(vendorData.map(v => v.name)));
+          const missingVendors = uniqueVendors.filter(v => v && !transMap[v] && !DATA_TRANSLATIONS[v]);
+          missingVendors.forEach(async (v) => await ensureBilingual(v));
+        }
+
+        // 4. Check Payee/Payer from Transactions (in case they were manually entered)
+        if (txData) {
+          const uniquePayees = Array.from(new Set(txData.map(tx => tx.payee_payer)));
+          const missingPayees = uniquePayees.filter(p => p && !transMap[p] && !DATA_TRANSLATIONS[p]);
+          missingPayees.forEach(async (p) => await ensureBilingual(p));
+        }
+      }, 0);
 
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -386,6 +482,7 @@ export default function Dashboard() {
     if (error) {
       alert('Error deleting: ' + error.message);
     } else {
+      alert(t('delete_success'));
       setShowTransactionDetails(false);
       fetchInitialData();
     }
@@ -595,7 +692,7 @@ export default function Dashboard() {
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
           <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">{lang === 'bn' ? 'মোট ব্যয়' : 'Total Expense'}</p>
-          <p className="text-lg font-black text-white">৳{total.toLocaleString()}</p>
+          <p className="text-lg font-black text-white">৳{total.toLocaleString('en-US')}</p>
         </div>
       </div>
     );
@@ -665,7 +762,7 @@ export default function Dashboard() {
           <motion.path
             d={getPath('income')}
             fill="transparent"
-            stroke="#00FF41"
+            stroke="#10B981"
             strokeWidth="2"
             initial={{ pathLength: 0 }}
             animate={{ pathLength: 1 }}
@@ -675,7 +772,7 @@ export default function Dashboard() {
           <motion.path
             d={getPath('expense')}
             fill="transparent"
-            stroke="#E23636"
+            stroke="#F43F5E"
             strokeWidth="2"
             initial={{ pathLength: 0 }}
             animate={{ pathLength: 1 }}
@@ -684,12 +781,12 @@ export default function Dashboard() {
 
           <defs>
             <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#00FF41" stopOpacity="1" />
-              <stop offset="100%" stopColor="#00FF41" stopOpacity="0" />
+              <stop offset="0%" stopColor="#10B981" stopOpacity="1" />
+              <stop offset="100%" stopColor="#10B981" stopOpacity="0" />
             </linearGradient>
             <linearGradient id="expenseGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#E23636" stopOpacity="1" />
-              <stop offset="100%" stopColor="#E23636" stopOpacity="0" />
+              <stop offset="0%" stopColor="#F43F5E" stopOpacity="1" />
+              <stop offset="100%" stopColor="#F43F5E" stopOpacity="0" />
             </linearGradient>
           </defs>
         </svg>
@@ -712,9 +809,7 @@ export default function Dashboard() {
                 projectSubTab === tab ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-white/40 hover:text-white/60'
               }`}
             >
-              {lang === 'bn' 
-                ? (tab === 'running' ? 'চলমান' : tab === 'completed' ? 'সম্পন্ন' : 'আর্কাইভ')
-                : tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {t(tab)}
             </button>
           ))}
         </div>
@@ -731,7 +826,7 @@ export default function Dashboard() {
                   <div className="flex items-center gap-2 mt-1">
                     <div className={`w-1.5 h-1.5 rounded-full ${p.status === 'running' ? 'bg-green-500 animate-pulse' : 'bg-white/20'}`} />
                     <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">
-                      {p.status === 'running' ? (lang === 'bn' ? 'চলমান অবস্থা' : 'Running Status') : (lang === 'bn' ? 'বন্ধ প্রজেক্ট' : 'Closed Project')}
+                      {p.status === 'running' ? t('status_running') : t('status_closed')}
                     </p>
                   </div>
                 </div>
@@ -739,14 +834,14 @@ export default function Dashboard() {
 
               <div className="grid grid-cols-2 gap-4 mt-6 relative z-10">
                 <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
-                  <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{lang === 'bn' ? 'সাইট ম্যানেজার' : 'Site Manager'}</p>
+                  <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{t('site_manager')}</p>
                   <div className="flex items-center gap-2">
                     <Users size={14} className="text-blue-400" />
-                    <span className="text-xs font-bold text-white">4 {lang === 'bn' ? 'সদস্য' : 'Active'}</span>
+                    <span className="text-xs font-bold text-white">4 {t('members_active')}</span>
                   </div>
                 </div>
                 <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
-                  <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{lang === 'bn' ? 'শুরু হয়েছে' : 'Started'}</p>
+                  <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{t('started')}</p>
                   <div className="flex items-center gap-2">
                     <Calendar size={14} className="text-green-400" />
                     <span className="text-xs font-bold text-white">Apr 2024</span>
@@ -796,13 +891,13 @@ export default function Dashboard() {
                     }}
                     className="flex-1 py-3.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-blue-600/20 flex items-center justify-center gap-2"
                   >
-                    <Users size={14} /> {lang === 'bn' ? 'টিম ম্যানেজ' : 'Manage Team'}
+                    <Users size={14} /> {t('manage_team')}
                   </button>
                   <button 
                     onClick={() => handleEditProjectClick(p)}
                     className="flex-1 py-3.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-blue-600/20 flex items-center justify-center gap-2"
                   >
-                    <Edit2 size={14} /> {lang === 'bn' ? 'এডিট' : 'Edit Info'}
+                    <Edit2 size={14} /> {t('edit_info')}
                   </button>
                 </div>
               </div>
@@ -810,7 +905,7 @@ export default function Dashboard() {
           )) : (
             <div className="py-20 text-center opacity-20">
               <Package size={48} className="mx-auto mb-4" />
-              <p className="text-sm font-bold uppercase tracking-[0.2em]">{lang === 'bn' ? 'কোন প্রজেক্ট পাওয়া যায়নি' : 'No Projects Found'}</p>
+              <p className="text-sm font-bold uppercase tracking-[0.2em]">{t('no_projects')}</p>
             </div>
           )}
         </div>
@@ -865,16 +960,16 @@ export default function Dashboard() {
     return (
       <div className="px-6 pb-20 animate-in fade-in duration-500">
         {/* Modern Project Selector (Dropdown) */}
-        <div className="mb-8 sticky top-0 z-30 bg-[#1A1C1E]/80 backdrop-blur-md py-4 -mx-6 px-6 border-b border-white/5">
+        <div className="mb-8 sticky top-0 z-30 bg-[#0F172A]/80 backdrop-blur-md py-4 -mx-6 px-6 border-b border-white/5">
           <div className="relative group">
             <select 
               value={selectedReportProjectId || ''}
               onChange={(e) => setSelectedReportProjectId(e.target.value || null)}
               className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-5 text-sm font-bold text-white appearance-none focus:outline-none focus:border-blue-600 transition-all cursor-pointer pr-12"
             >
-              <option value="" className="bg-[#1A1C1E]">{lang === 'bn' ? 'প্রজেক্ট নির্বাচন করুন' : 'Select Project'}</option>
+              <option value="" className="bg-[#0F172A]">{t('select_project_report')}</option>
               {runningProjects.map(p => (
-                <option key={p.id} value={p.id} className="bg-[#1A1C1E]">
+                <option key={p.id} value={p.id} className="bg-[#0F172A]">
                   {getDisplayName(p.name)}
                 </option>
               ))}
@@ -902,31 +997,31 @@ export default function Dashboard() {
                     <Activity size={24} />
                   </div>
                   <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-white/40 mb-1">
-                    {lang === 'bn' ? 'প্রজেক্ট প্রফিট' : 'Project Profit'}
+                    {t('project_profit')}
                   </label>
-                  <h2 className={`text-4xl font-black ${profit >= 0 ? 'text-[#00FF41]' : 'text-[#E23636]'}`}>
-                    ৳ {profit.toLocaleString()}
+                  <h2 className={`text-4xl font-black ${profit >= 0 ? 'text-[#10B981]' : 'text-[#F43F5E]'}`}>
+                    ৳ {profit.toLocaleString('en-US')}
                   </h2>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="md3-card mesh-green p-5 border border-white/5 relative overflow-hidden">
                     <div className="flex items-center gap-3 mb-3">
-                      <div className="w-8 h-8 rounded-lg bg-[#00FF41]/10 flex items-center justify-center text-[#00FF41]">
+                      <div className="w-8 h-8 rounded-lg bg-[#10B981]/10 flex items-center justify-center text-[#10B981]">
                         <TrendingUp size={16} />
                       </div>
                       <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">{t('income')}</span>
                     </div>
-                    <p className="text-xl font-black text-[#00FF41]">৳ {income.toLocaleString()}</p>
+                    <p className="text-xl font-black text-[#10B981]">৳ {income.toLocaleString('en-US')}</p>
                   </div>
                   <div className="md3-card mesh-red p-5 border border-white/5 relative overflow-hidden">
                     <div className="flex items-center gap-3 mb-3">
-                      <div className="w-8 h-8 rounded-lg bg-[#E23636]/10 flex items-center justify-center text-[#E23636]">
+                      <div className="w-8 h-8 rounded-lg bg-[#F43F5E]/10 flex items-center justify-center text-[#F43F5E]">
                         <TrendingDown size={16} />
                       </div>
                       <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">{t('expense')}</span>
                     </div>
-                    <p className="text-xl font-black text-[#E23636]">৳ {expense.toLocaleString()}</p>
+                    <p className="text-xl font-black text-[#F43F5E]">৳ {expense.toLocaleString('en-US')}</p>
                   </div>
                 </div>
               </div>
@@ -937,7 +1032,7 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between px-1">
                   <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-white/60 flex items-center gap-2">
                     <PieChart size={16} />
-                    {lang === 'bn' ? 'চলমান প্রজেক্টসমূহ' : 'Running Projects'}
+                    {t('running_projects')}
                   </h3>
                   <span className="text-[10px] font-bold text-white/30 uppercase">{runningProjects.length} Projects</span>
                 </div>
@@ -959,35 +1054,35 @@ export default function Dashboard() {
                         <h4 className="text-xl font-black text-white group-hover:text-blue-400 transition-colors">{getDisplayName(p.name)}</h4>
                         <div className="flex items-center gap-2 mt-1">
                           <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                          <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">Running Status</p>
+                          <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">{t('status_running')}</p>
                         </div>
                       </div>
                       <div className="text-right">
                         <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg ${p.profit >= 0 ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                          {p.income > 0 ? Math.round((p.profit / p.income) * 100) : 0}% Margin
+                          {p.income > 0 ? Math.round((p.profit / p.income) * 100) : 0}% {t('margin')}
                         </span>
                       </div>
                     </div>
                     
                     <div className="grid grid-cols-3 gap-2 relative z-10">
                       <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
-                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">Income</p>
-                        <p className="text-xs font-black text-white">৳{p.income.toLocaleString()}</p>
+                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{t('income')}</p>
+                        <p className="text-xs font-black text-white">৳{p.income.toLocaleString('en-US')}</p>
                       </div>
                       <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
-                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">Expense</p>
-                        <p className="text-xs font-black text-white">৳{p.expense.toLocaleString()}</p>
+                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{t('expense')}</p>
+                        <p className="text-xs font-black text-white">৳{p.expense.toLocaleString('en-US')}</p>
                       </div>
                       <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
-                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">Net</p>
-                        <p className={`text-xs font-black ${p.profit >= 0 ? 'text-blue-400' : 'text-red-400'}`}>৳{Math.abs(p.profit).toLocaleString()}</p>
+                        <p className="text-[8px] text-white/30 uppercase font-bold mb-1 tracking-tighter">{t('net')}</p>
+                        <p className={`text-xs font-black ${p.profit >= 0 ? 'text-blue-400' : 'text-red-400'}`}>৳{Math.abs(p.profit).toLocaleString('en-US')}</p>
                       </div>
                     </div>
 
                     <div className="mt-6 flex items-center justify-between">
                       <div className="flex -space-x-2">
                         {[1, 2, 3].map(i => (
-                          <div key={i} className="w-6 h-6 rounded-full border-2 border-[#1A1C1E] bg-white/10 flex items-center justify-center text-[8px] text-white/40 font-bold">
+                          <div key={i} className="w-6 h-6 rounded-full border-2 border-[#0F172A] bg-white/10 flex items-center justify-center text-[8px] text-white/40 font-bold">
                             U{i}
                           </div>
                         ))}
@@ -999,7 +1094,7 @@ export default function Dashboard() {
                         }}
                         className="px-5 py-2.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2 border border-blue-600/20 active:scale-95"
                       >
-                        {lang === 'bn' ? 'বিস্তারিত দেখুন' : 'View Details'} <ArrowRight size={12} />
+                        {t('view_details')} <ArrowRight size={12} />
                       </button>
                     </div>
                   </motion.div>
@@ -1018,7 +1113,7 @@ export default function Dashboard() {
                       {lang === 'bn' ? 'ব্যয়ের খাতসমূহ' : 'Spending Breakdown'}
                     </h3>
                     <div className="text-right">
-                      <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Total Transactions</p>
+                      <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">{t('total_transactions')}</p>
                       <p className="text-sm font-black text-white">{relevantTx.length}</p>
                     </div>
                   </div>
@@ -1037,7 +1132,7 @@ export default function Dashboard() {
                               <span className="text-xs font-bold text-white/80">{getDisplayName(cat.name)}</span>
                             </div>
                             <div className="text-right">
-                              <span className="text-xs font-black text-white block">৳{cat.value.toLocaleString()}</span>
+                              <span className="text-xs font-black text-white block">৳{cat.value.toLocaleString('en-US')}</span>
                             </div>
                           </div>
                           <div className="h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
@@ -1051,7 +1146,7 @@ export default function Dashboard() {
                         </div>
                       )) : (
                         <div className="bg-white/2 border border-dashed border-white/10 rounded-3xl p-8 text-center">
-                          <p className="text-white/20 text-xs italic">No data</p>
+                          <p className="text-white/20 text-xs italic">{t('no_data')}</p>
                         </div>
                       )}
                     </div>
@@ -1067,12 +1162,12 @@ export default function Dashboard() {
                     </div>
                     <div className="flex gap-4">
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-[#00FF41]" />
-                        <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">Income</span>
+                        <div className="w-2 h-2 rounded-full bg-[#10B981]" />
+                        <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">{t('income')}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-[#E23636]" />
-                        <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">Expense</span>
+                        <div className="w-2 h-2 rounded-full bg-[#F43F5E]" />
+                        <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">{t('expense')}</span>
                       </div>
                     </div>
                   </div>
@@ -1086,14 +1181,14 @@ export default function Dashboard() {
                       <Activity size={20} />
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-white">Project Health Insights</h4>
-                      <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">Real-time Analysis</p>
+                      <h4 className="text-sm font-bold text-white">{t('health_insights')}</h4>
+                      <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">{t('realtime_analysis')}</p>
                     </div>
                   </div>
                   <p className="text-xs text-white/60 leading-relaxed">
-                    Based on current data, your primary expense is <span className="text-white font-bold">{categories[0]?.name || 'N/A'}</span>. 
-                    The project has a <span className="text-blue-400 font-bold">{income > 0 ? Math.round((profit/income)*100) : 0}%</span> profit margin which is 
-                    <span className="text-[#00FF41] font-bold"> {profit >= 0 ? 'Optimal' : 'Needs Review'}</span>.
+                    {t('primary_expense_is')} <span className="text-white font-bold">{getDisplayName(categories[0]?.name) || 'N/A'}</span>. 
+                    {t('profit_margin_is')} <span className="text-blue-400 font-bold">{income > 0 ? Math.round((profit/income)*100) : 0}%</span> which is 
+                    <span className="text-[#10B981] font-bold"> {profit >= 0 ? t('optimal') : t('needs_review')}</span>.
                   </p>
                 </div>
 
@@ -1116,7 +1211,7 @@ export default function Dashboard() {
                       {reportDateFilter && (
                         <button 
                           onClick={() => setReportDateFilter('')}
-                          className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-[8px] border-2 border-[#1A1C1E]"
+                          className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-[8px] border-2 border-[#0F172A]"
                         >
                           <X size={10} />
                         </button>
@@ -1149,7 +1244,7 @@ export default function Dashboard() {
                         return (
                           <div className="bg-white/2 border border-dashed border-white/10 rounded-3xl p-12 text-center">
                             <Calendar size={40} className="mx-auto mb-4 text-white/10" />
-                            <p className="text-white/20 text-xs italic">No transactions found for the selected period.</p>
+                            <p className="text-white/20 text-xs italic">{t('no_transactions_found')}</p>
                           </div>
                         );
                       }
@@ -1158,9 +1253,9 @@ export default function Dashboard() {
                         <>
                           {visibleDates.map((date) => (
                             <div key={date} className="relative pl-6 border-l border-white/5 space-y-4">
-                              <div className="absolute -left-1.5 top-0 w-3 h-3 rounded-full bg-blue-600 border-4 border-[#1A1C1E] shadow-lg shadow-blue-600/20" />
+                              <div className="absolute -left-1.5 top-0 w-3 h-3 rounded-full bg-blue-600 border-4 border-[#0F172A] shadow-lg shadow-blue-600/20" />
                               <h4 className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] mb-4">
-                                {new Date(date).toLocaleDateString(lang === 'bn' ? 'bn-BD' : 'en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                {new Date(date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
                               </h4>
                               
                               <div className="grid grid-cols-1 gap-3">
@@ -1174,17 +1269,17 @@ export default function Dashboard() {
                                     className="md3-card-elevated glass-panel p-4 flex items-center justify-between border border-white/5 active:scale-[0.98] transition-all cursor-pointer group"
                                   >
                                     <div className="flex items-center gap-4">
-                                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${tx.type === 'income' ? 'bg-[#00FF41]/10 text-[#00FF41]' : 'bg-[#E23636]/10 text-[#E23636]'}`}>
+                                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${tx.type === 'income' ? 'bg-[#10B981]/10 text-[#10B981]' : 'bg-[#F43F5E]/10 text-[#F43F5E]'}`}>
                                         {tx.type === 'income' ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
                                       </div>
                                       <div>
                                         <p className="text-xs font-bold text-white group-hover:text-blue-400 transition-colors">{getDisplayName(tx.nature)}</p>
-                                        <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">{tx.category}</p>
+                                        <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest">{getDisplayName(tx.category)}</p>
                                       </div>
                                     </div>
                                     <div className="text-right">
-                                      <p className={`text-sm font-black ${tx.type === 'income' ? 'text-[#00FF41]' : 'text-white'}`}>
-                                        {tx.type === 'income' ? '+' : '-'} ৳ {tx.amount.toLocaleString()}
+                                      <p className={`text-sm font-black ${tx.type === 'income' ? 'text-[#10B981]' : 'text-white'}`}>
+                                        {tx.type === 'income' ? '+' : '-'} ৳ {tx.amount.toLocaleString('en-US')}
                                       </p>
                                       <p className="text-[8px] text-white/20 font-bold uppercase">{tx.time}</p>
                                     </div>
@@ -1199,7 +1294,7 @@ export default function Dashboard() {
                               onClick={() => setReportDaysLimit(prev => prev + 7)}
                               className="w-full py-4 bg-white/5 hover:bg-white/10 text-white/40 rounded-2xl text-[10px] font-bold uppercase tracking-[0.3em] active:scale-[0.98] transition-all border border-white/5 flex items-center justify-center gap-2"
                             >
-                              <Plus size={14} /> {lang === 'bn' ? 'আরও দেখুন' : 'Show More (Next 7 Days)'}
+                              <Plus size={14} /> {t('show_more_days')}
                             </button>
                           )}
                         </>
@@ -1213,7 +1308,7 @@ export default function Dashboard() {
                   onClick={() => setSelectedReportProjectId(null)}
                   className="w-full py-5 bg-white/5 hover:bg-white/10 text-white/40 rounded-3xl text-[10px] font-bold uppercase tracking-[0.3em] active:scale-[0.98] transition-all border border-white/5"
                 >
-                  ← {lang === 'bn' ? 'প্রজেক্ট লিস্টে ফিরে যান' : 'Back to All Projects'}
+                  ← {t('back_to_projects')}
                 </button>
               </div>
             )}
@@ -1237,7 +1332,11 @@ export default function Dashboard() {
       add_expense: { bn: 'ব্যয়', en: 'Expense' },
       daily_tx: { bn: 'দৈনিক লেনদেন', en: 'Daily Transactions' },
       today: { bn: 'আজ', en: 'Today' },
-      search: { bn: 'লেনদেন খুঁজুন...', en: 'Search transactions...' },
+      search: { bn: 'অনুসন্ধান করুন...', en: 'Search...' },
+      search_button: { bn: 'খুঁজুন', en: 'Search' },
+      recent_transactions: { bn: 'সাম্প্রতিক লেনদেন', en: 'Recent Transactions' },
+      load_more: { bn: 'আরো লোড করুন', en: 'Load More' },
+      clear_filters: { bn: 'ফিল্টার মুছুন', en: 'Clear Filters' },
       total_expense: { bn: 'মোট ব্যয় (৳)', en: 'Total Expense (৳)' },
       project: { bn: 'প্রজেক্ট', en: 'Project' },
 
@@ -1266,7 +1365,7 @@ export default function Dashboard() {
       settings: { bn: 'সেটিংস', en: 'Settings' },
       
       // Transaction Details
-      tx_details: { bn: 'লেনদেনের বিস্তারিত', en: 'Transaction Details' },
+      transaction_details: { bn: 'লেনদেনের বিস্তারিত', en: 'Transaction Details' },
       date_time: { bn: 'তারিখ ও সময়', en: 'Date & Time' },
       category: { bn: 'ক্যাটাগরি', en: 'Category' },
       amount_val: { bn: 'টাকার পরিমাণ', en: 'Amount' },
@@ -1288,7 +1387,66 @@ export default function Dashboard() {
       mark_archived: { bn: 'আর্কাইভ করুন', en: 'Archive' },
       reopen: { bn: 'পুনরায় খুলুন', en: 'Reopen' },
       restore: { bn: 'আগের অবস্থায় আনুন', en: 'Restore' },
-      confirm_status_change: { bn: 'আপনি কি নিশ্চিতভাবে স্ট্যাটাস পরিবর্তন করতে চান:', en: 'Are you sure you want to change status to:' }
+      confirm_status_change: { bn: 'আপনি কি নিশ্চিতভাবে স্ট্যাটাস পরিবর্তন করতে চান:', en: 'Are you sure you want to change status to:' },
+
+      // Missing UI Strings
+      total_transactions: { bn: 'মোট লেনদেন', en: 'Total Transactions' },
+      no_data: { bn: 'কোন তথ্য নেই', en: 'No data' },
+      health_insights: { bn: 'প্রজেক্ট হেলথ ইনসাইটস', en: 'Project Health Insights' },
+      realtime_analysis: { bn: 'রিয়েল-টাইম অ্যানালাইসিস', en: 'Real-time Analysis' },
+      primary_expense_is: { bn: 'আপনার প্রধান ব্যয় হলো', en: 'your primary expense is' },
+      profit_margin_is: { bn: 'প্রজেক্টটির লাভ মার্জিন হলো', en: 'The project has a profit margin of' },
+      optimal: { bn: 'সঠিক', en: 'Optimal' },
+      needs_review: { bn: 'পর্যালোচনা প্রয়োজন', en: 'Needs Review' },
+      no_transactions_found: { bn: 'নির্বাচিত সময়ের জন্য কোন লেনদেন পাওয়া যায়নি।', en: 'No transactions found for the selected period.' },
+      show_more_days: { bn: 'আরও দেখুন (পরবর্তী ৭ দিন)', en: 'Show More (Next 7 Days)' },
+      back_to_projects: { bn: 'প্রজেক্ট লিস্টে ফিরে যান', en: 'Back to All Projects' },
+      enter_new_name: { bn: 'নতুন নাম লিখুন...', en: 'Enter new name...' },
+      new_main_cat: { bn: 'নতুন মেইন ক্যাটাগরি...', en: 'New Main Category...' },
+      new_sub_cat: { bn: 'নতুন সাব ক্যাটাগরি...', en: 'New Sub Category...' },
+      new_unit: { bn: 'নতুন ইউনিট...', en: 'New Unit...' },
+      project_name_bilingual: { bn: 'প্রজেক্টের নাম (বাংলা/ইংরেজি)', en: 'Project Name (Bilingual supported)' },
+      project_success: { bn: 'প্রজেক্ট সফলভাবে তৈরি হয়েছে!', en: 'Project created successfully!' },
+      project_update_success: { bn: 'প্রজেক্ট সফলভাবে আপডেট হয়েছে!', en: 'Project updated successfully!' },
+      delete_project: { bn: 'প্রজেক্ট ডিলিট করুন', en: 'Delete Project' },
+      select_project: { bn: 'প্রজেক্ট সিলেক্ট করুন', en: 'Select a project' },
+      select_payee: { bn: 'পাওনাদার সিলেক্ট করুন', en: 'Select or add a payee' },
+      select_main_cat: { bn: 'মেইন ক্যাটাগরি সিলেক্ট করুন', en: 'Select main category' },
+      select_sub_cat: { bn: 'সাব ক্যাটাগরি সিলেক্ট করুন', en: 'Select sub category' },
+      enter_valid_qty: { bn: 'সঠিক পরিমাণ লিখুন', en: 'Enter valid quantity' },
+      save_success: { bn: 'লেনদেন সফলভাবে সেভ হয়েছে!', en: 'Transaction saved successfully!' },
+      delete_success: { bn: 'সফলভাবে ডিলিট হয়েছে!', en: 'Deleted successfully!' },
+      invitation_sent: { bn: 'আমন্ত্রণ পাঠানো হয়েছে!', en: 'Invitation sent!' },
+      running: { bn: 'চলমান', en: 'Running' },
+      completed: { bn: 'সম্পন্ন', en: 'Completed' },
+      archived: { bn: 'আর্কাইভ', en: 'Archived' },
+      status_running: { bn: 'চলমান অবস্থা', en: 'Running Status' },
+      status_closed: { bn: 'বন্ধ প্রজেক্ট', en: 'Closed Project' },
+      site_manager: { bn: 'সাইট ম্যানেজার', en: 'Site Manager' },
+      members_active: { bn: 'সদস্য', en: 'Active Members' },
+      started: { bn: 'শুরু হয়েছে', en: 'Started' },
+      manage_team: { bn: 'টিম ম্যানেজ', en: 'Manage Team' },
+      edit_info: { bn: 'এডিট ইনফো', en: 'Edit Info' },
+      no_projects: { bn: 'কোন প্রজেক্ট পাওয়া যায়নি', en: 'No Projects Found' },
+      select_project_report: { bn: 'প্রজেক্ট নির্বাচন করুন', en: 'Select Project' },
+      project_profit: { bn: 'প্রজেক্ট প্রফিট', en: 'Project Profit' },
+      running_projects: { bn: 'চলমান প্রজেক্টসমূহ', en: 'Running Projects' },
+      margin: { bn: 'মার্জিন', en: 'Margin' },
+      net: { bn: 'নিট', en: 'Net' },
+      view_details: { bn: 'বিস্তারিত দেখুন', en: 'View Details' },
+      account: { bn: 'অ্যাকাউন্ট', en: 'Account' },
+      logged_in_as: { bn: 'আপনি লগইন করেছেন', en: 'You are currently logged in as' },
+      sign_out: { bn: 'লগ আউট', en: 'Sign Out' },
+      current_team: { bn: 'বর্তমান টিম', en: 'Current Team' },
+      pending_invite: { bn: 'পেন্ডিং ইনভাইট', en: 'Pending Invite' },
+      assign_manager: { bn: 'সাইট ম্যানেজার নিযুক্ত করুন', en: 'Assign Site Manager' },
+      spending_breakdown: { bn: 'ব্যয়ের খাতসমূহ', en: 'Spending Breakdown' },
+      cash: { bn: 'ক্যাশ', en: 'Cash' },
+      team_management: { bn: 'টিম ম্যানেজমেন্ট', en: 'Team Management' },
+      manager_email: { bn: 'সাইট ম্যানেজারের ইমেইল', en: 'Site Manager Email' },
+      assign_to_project: { bn: 'প্রজেক্টে যুক্ত করুন', en: 'Assign to Project' },
+      select_project_option: { bn: 'প্রজেক্ট সিলেক্ট করুন', en: 'Select Project' },
+      no_members: { bn: 'কোন সদস্য যুক্ত নেই', en: 'No members assigned' }
     };
 
 
@@ -1391,7 +1549,14 @@ export default function Dashboard() {
     'Material Purchase': { bn: 'মালামাল ক্রয়', en: 'Material Purchase' },
     'Project Alpha': { bn: 'প্রজেক্ট আলফা', en: 'Project Alpha' },
     'Project Beta': { bn: 'প্রজেক্ট বিটা', en: 'Project Beta' },
-    'Road Work': { bn: 'রাস্তার কাজ', en: 'Road Work' }
+    'Road Work': { bn: 'রাস্তার কাজ', en: 'Road Work' },
+    
+    // UI Labels
+    'recent_transactions': { bn: 'সাম্প্রতিক লেনদেন', en: 'Recent Transactions' },
+    'daily_transactions': { bn: 'দৈনিক লেনদেন তালিকা', en: 'Daily Transaction List' },
+    'load_more': { bn: 'আরো লোড করুন', en: 'Load More' },
+    'search_placeholder': { bn: 'অনুসন্ধান করুন...', en: 'Search...' },
+    'clear_filters': { bn: 'ফিল্টার মুছুন', en: 'Clear Filters' }
   };
 
 
@@ -1414,13 +1579,13 @@ export default function Dashboard() {
 
   const validate = () => {
     const newErrors: { [key: string]: string } = {};
-    if (!amount || parseFloat(amount) <= 0) newErrors.amount = 'Enter valid amount';
-    if (!selectedProject) newErrors.project = 'Select a project';
-    if (!selectedPayee) newErrors.payee = 'Select or add a payee';
-    if (!mainCategory) newErrors.mainCategory = 'Select main category';
-    if (!subCategory) newErrors.subCategory = 'Select sub category';
-    if (!quantity || parseFloat(quantity) <= 0) newErrors.quantity = 'Enter valid quantity';
-    if (!selectedUnit) newErrors.unit = 'Select a unit';
+    if (!amount || parseFloat(amount) <= 0) newErrors.amount = t('enter_valid_amount');
+    if (!selectedProject) newErrors.project = t('select_project');
+    if (!selectedPayee) newErrors.payee = t('select_payee');
+    if (!mainCategory) newErrors.mainCategory = t('select_main_cat');
+    if (!subCategory) newErrors.subCategory = t('select_sub_cat');
+    if (!quantity || parseFloat(quantity) <= 0) newErrors.quantity = t('enter_valid_qty');
+    if (!selectedUnit) newErrors.unit = t('select_unit');
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -1431,21 +1596,24 @@ export default function Dashboard() {
 
   return (
     <main className={`pb-24 lg:pb-8 relative transition-all duration-300 ${lang === 'bn' ? 'bn-text' : 'en-text'}`}>
-
-
-      {activeTab === 'dashboard' ? (
-        <>
-          {/* Header */}
-          <header className="px-6 pt-8 pb-4 flex justify-between items-center">
-
+      {/* Global Header */}
+      <header className="px-6 pt-8 pb-4 flex justify-between items-center sticky top-0 z-[50] bg-[#0F172A]/80 backdrop-blur-md border-b border-white/5">
         <h1 className="text-2xl font-semibold tracking-tight text-white">{t('app_name')}</h1>
         <div className="flex gap-2">
-          <button 
-            onClick={() => setLang(lang === 'bn' ? 'en' : 'bn')}
-            className="px-3 py-1 rounded-full bg-white/10 text-[10px] font-bold uppercase tracking-widest hover:bg-white/20 transition-colors"
-          >
-            {lang === 'bn' ? 'English' : 'বাংলা'}
-          </button>
+          <div className="flex bg-white/5 rounded-full p-1 border border-white/10">
+            <button 
+              onClick={() => setLang('en')}
+              className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${lang === 'en' ? 'bg-blue-600 text-white shadow-lg' : 'text-white/40 hover:text-white'}`}
+            >
+              EN
+            </button>
+            <button 
+              onClick={() => setLang('bn')}
+              className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${lang === 'bn' ? 'bg-blue-600 text-white shadow-lg' : 'text-white/40 hover:text-white'}`}
+            >
+              বাংলা
+            </button>
+          </div>
           
           {userRole === 'contractor' && (
             <>
@@ -1473,71 +1641,12 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Quick Stats Cards */}
-      <section className="px-6 mb-8 flex overflow-x-auto gap-3 no-scrollbar snap-x snap-mandatory">
-
-        {/* Income Card */}
-        <div className="flex-none w-[calc(50%-6px)] md:w-1/3 md3-card bg-income-container snap-center p-2 border-0">
-          <div className="flex justify-between items-center mb-1 pb-1 border-b border-black/10">
-            <span className="text-sm font-bold uppercase tracking-wider text-black">{t('income')}</span>
-            <TrendingUp size={18} className="text-black/60" />
-          </div>
-
-          <ul className="space-y-1 text-sm font-bold">
-            {projectStats.length > 0 ? projectStats.map((p) => (
-              <li key={p.id} className="flex flex-col">
-                <span className="opacity-90 text-base leading-tight text-black font-black break-words">{getDisplayName(p.name)}</span> 
-                <span className="text-black text-lg leading-none font-medium opacity-80">৳ {p.income.toLocaleString()}</span>
-              </li>
-            )) : (
-              <li className="text-black/40 text-xs italic">No data</li>
-            )}
-          </ul>
-        </div>
-
-        {/* Expense Card */}
-        <div className="flex-none w-[calc(50%-6px)] md:w-1/3 md3-card bg-expense-container snap-center p-2 border-0">
-          <div className="flex justify-between items-center mb-1 pb-1 border-b border-white/10">
-            <span className="text-sm font-bold uppercase tracking-wider text-white">{t('expense')}</span>
-            <TrendingDown size={18} className="text-white/60" />
-          </div>
-
-          <ul className="space-y-1 text-sm font-bold">
-            {projectStats.length > 0 ? projectStats.map((p) => (
-              <li key={p.id} className="flex flex-col">
-                <span className="opacity-90 text-base leading-tight text-white font-black break-words">{getDisplayName(p.name)}</span> 
-                <span className="text-white text-lg leading-none font-medium opacity-80">৳ {p.expense.toLocaleString()}</span>
-              </li>
-            )) : (
-              <li className="text-white/40 text-xs italic">No data</li>
-            )}
-          </ul>
-        </div>
-
-        {/* Profit Card */}
-        <div className="flex-none w-[calc(50%-6px)] md:w-1/3 md3-card bg-profit-container snap-center p-2 border-0">
-          <div className="flex justify-between items-center mb-1 pb-1 border-b border-white/10">
-            <span className="text-sm font-bold uppercase tracking-wider text-white">{t('profit')}</span>
-            <ArrowUpRight size={18} className="text-white/60" />
-          </div>
-
-          <ul className="space-y-1 text-sm font-bold">
-            {projectStats.length > 0 ? projectStats.map((p) => (
-              <li key={p.id} className="flex flex-col">
-                <span className="opacity-90 text-base leading-tight text-white font-black break-words">{getDisplayName(p.name)}</span> 
-                <span className="text-white text-lg leading-none font-medium opacity-80">{p.profit >= 0 ? '+' : ''}৳ {p.profit.toLocaleString()}</span>
-              </li>
-            )) : (
-              <li className="text-white/40 text-xs italic">No data</li>
-            )}
-          </ul>
-        </div>
-
-      </section>
+      {activeTab === 'dashboard' ? (
+        <div className="pt-6">
 
 
       {/* Action Buttons (Sticky on Scroll) */}
-      <div className="sticky top-0 z-40 bg-[#1A1C1E] pt-4 pb-4 -mt-2 border-b border-white/5 shadow-2xl">
+      <div className="sticky top-0 z-40 bg-[#0F172A] pt-4 pb-4 -mt-2 border-b border-white/5 shadow-2xl">
         <section className="px-6 flex gap-3">
 
           <button 
@@ -1545,7 +1654,7 @@ export default function Dashboard() {
               setErrors({});
               setShowIncomeModal(true);
             }}
-            className="flex-1 py-4 px-4 rounded-2xl bg-[#00FF41] hover:bg-[#00e63a] text-black font-black flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-green-900/40 uppercase tracking-tighter text-lg"
+            className="flex-1 py-4 px-4 rounded-2xl bg-[#10B981] hover:bg-[#059669] text-black font-black flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-green-900/40 uppercase tracking-tighter text-lg"
           >
             <Plus size={28} strokeWidth={4} /> {t('add_income')}
           </button>
@@ -1555,7 +1664,7 @@ export default function Dashboard() {
               setErrors({});
               setShowExpenseModal(true);
             }}
-            className="flex-1 py-4 px-4 rounded-2xl bg-[#E23636] hover:bg-[#d12f2f] text-white font-black flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-red-900/40 uppercase tracking-tighter text-lg"
+            className="flex-1 py-4 px-4 rounded-2xl bg-[#F43F5E] hover:bg-[#E11D48] text-white font-black flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-red-900/40 uppercase tracking-tighter text-lg"
           >
             <Minus size={28} strokeWidth={4} /> {t('add_expense')}
           </button>
@@ -1582,13 +1691,13 @@ export default function Dashboard() {
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed bottom-0 left-0 right-0 bg-[#1A1C1E] rounded-t-[32px] z-[70] max-h-[92vh] overflow-y-auto px-6 pb-10 pt-4 shadow-2xl border-t border-white/10"
+              className="fixed bottom-0 left-0 right-0 bg-[#0F172A] rounded-t-[32px] z-[70] max-h-[92vh] overflow-y-auto px-6 pb-10 pt-4 shadow-2xl border-t border-white/10"
             >
               <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mb-8" />
               
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-[#E23636]/20 flex items-center justify-center text-[#E23636]">
+                  <div className="w-10 h-10 rounded-xl bg-[#F43F5E]/20 flex items-center justify-center text-[#F43F5E]">
                     <TrendingDown size={20} />
                   </div>
                   {t('add_expense')}
@@ -1601,7 +1710,7 @@ export default function Dashboard() {
               <div className="space-y-6">
                 {/* 1. Main Money Amount (Top Priority) */}
                 <div>
-                  <label className="text-[10px] uppercase font-bold tracking-widest text-[#E23636] mb-2 block">{t('total_expense')}</label>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-[#F43F5E] mb-2 block">{t('total_expense')}</label>
                   <div className="relative">
                     <span className="absolute left-0 bottom-2 text-4xl font-bold text-white/20">৳</span>
                     <input 
@@ -1612,7 +1721,7 @@ export default function Dashboard() {
                         setAmount(e.target.value);
                         if (errors.amount) setErrors({...errors, amount: ''});
                       }}
-                      className={`w-full bg-transparent border-b-2 border-white/10 pb-2 pl-10 text-4xl font-bold text-white focus:outline-none focus:border-[#E23636] transition-colors ${errors.amount ? 'border-red-500 animate-pulse' : ''}`}
+                      className={`w-full bg-transparent border-b-2 border-white/10 pb-2 pl-10 text-4xl font-bold text-white focus:outline-none focus:border-[#F43F5E] transition-colors ${errors.amount ? 'border-red-500 animate-pulse' : ''}`}
                       autoFocus
                     />
                   </div>
@@ -1633,7 +1742,7 @@ export default function Dashboard() {
                         }}
                         className={`w-full bg-[#2D2F31] border rounded-2xl py-3 px-4 text-sm text-white appearance-none ${errors.project ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-white/10'}`}
                       >
-                        <option value="">{t('project')}</option>
+                        <option value="">{t('select_project')}</option>
                         {dbProjects.filter(p => p.status === 'running').map((p) => (
                           <option key={p.id} value={p.name}>{getDisplayName(p.name)}</option>
                         ))}
@@ -1658,7 +1767,7 @@ export default function Dashboard() {
                         }}
                         className={`w-full bg-[#2D2F31] border rounded-2xl py-3 px-4 text-sm text-white appearance-none ${errors.payee ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-white/10'}`}
                       >
-                        <option value="">{t('payee')}</option>
+                        <option value="">{t('select_payee')}</option>
                         {projectVendors[selectedProject]?.map((v) => (
                           <option key={v} value={v}>{getDisplayName(v)}</option>
                         ))}
@@ -1675,7 +1784,7 @@ export default function Dashboard() {
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-2">
                     <input 
                       type="text" 
-                      placeholder={lang === 'bn' ? 'নতুন নাম লিখুন...' : 'Enter new name...'}
+                      placeholder={t('enter_new_name')}
                       value={customPayee}
                       onChange={(e) => setCustomPayee(e.target.value)}
                       className="flex-1 bg-white/5 border border-red-500/30 rounded-xl py-2 px-4 text-sm"
@@ -1745,7 +1854,7 @@ export default function Dashboard() {
                         }}
                         className={`w-full bg-[#2D2F31] border rounded-2xl py-3 px-4 text-sm text-white appearance-none ${errors.mainCategory ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-white/10'}`}
                       >
-                        <option value="">{t('main_cat')}</option>
+                        <option value="">{t('select_main_cat')}</option>
                         {Object.keys(categoryMap).map(cat => <option key={cat} value={cat}>{getDisplayName(cat)}</option>)}
                         <option value="custom" className="text-red-400">{t('add_new')}</option>
 
@@ -1769,7 +1878,7 @@ export default function Dashboard() {
                         }}
                         className={`w-full bg-[#2D2F31] border rounded-2xl py-3 px-4 text-sm text-white appearance-none ${errors.subCategory ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-white/10'}`}
                       >
-                        <option value="">{t('sub_cat')}</option>
+                        <option value="">{t('select_sub_cat')}</option>
                         {categoryMap[mainCategory]?.subs.map(sub => <option key={sub} value={sub}>{getDisplayName(sub)}</option>)}
                         <option value="custom" className="text-red-400">{t('add_new')}</option>
 
@@ -1784,7 +1893,7 @@ export default function Dashboard() {
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-2">
                     <input 
                       type="text" 
-                      placeholder={lang === 'bn' ? 'নতুন মেইন ক্যাটাগরি...' : 'New Main Category...'}
+                      placeholder={t('new_main_cat')}
                       value={customMain}
                       onChange={(e) => setCustomMain(e.target.value)}
                       className="flex-1 bg-white/5 border border-red-500/30 rounded-xl py-2 px-4 text-sm"
@@ -1819,7 +1928,7 @@ export default function Dashboard() {
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-2">
                     <input 
                       type="text" 
-                      placeholder={lang === 'bn' ? 'নতুন সাব ক্যাটাগরি...' : 'New Sub Category...'}
+                      placeholder={t('new_sub_cat')}
                       value={customSub}
                       onChange={(e) => setCustomSub(e.target.value)}
                       className="flex-1 bg-white/5 border border-red-500/30 rounded-xl py-2 px-4 text-sm"
@@ -1937,7 +2046,7 @@ export default function Dashboard() {
                 <div>
                   <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block">{t('desc')}</label>
                   <textarea 
-                    placeholder={lang === 'bn' ? 'বিবরণ লিখুন...' : 'Enter details...'}
+                    placeholder={t('enter_details')}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-sm focus:outline-none focus:border-red-500/50 min-h-[80px]"
@@ -1956,7 +2065,7 @@ export default function Dashboard() {
                       <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-white/20">
                         <UploadCloud size={24} />
                       </div>
-                      <span className="text-xs text-white/40">{lang === 'bn' ? 'ভাউচার / মেমো আপলোড করুন' : 'Upload Voucher / Memo'}</span>
+                      <span className="text-xs text-white/40">{t('upload_voucher')}</span>
                       <input 
                         id="expense-voucher-input"
                         type="file" 
@@ -2015,17 +2124,31 @@ export default function Dashboard() {
 
                         const project = dbProjects.find(p => p.name === selectedProject);
                         
+                        // Bilingual translation before saving
+                        const translatedNature = await ensureBilingual(subCategory || mainCategory || 'Expense');
+                        const translatedCat = await ensureBilingual(mainCategory);
+                        const translatedSub = await ensureBilingual(subCategory);
+                        const translatedPayee = await ensureBilingual(selectedPayee);
+                        const translatedUnit = await ensureBilingual(selectedUnit);
+                        const translatedDesc = await ensureBilingual(description);
+
                         const txData = {
                           project_id: project?.id,
                           type: 'expense',
-                          nature: subCategory || mainCategory || 'Expense',
+                          nature: translatedNature,
+                          nature_en: translatedNature,
+                          nature_bn: dynamicTranslations[translatedNature] || (isBengali(subCategory || mainCategory) ? (subCategory || mainCategory) : ''),
                           amount: parseFloat(amount),
-                          category: mainCategory,
-                          subcategory: subCategory,
-                          payee_payer: selectedPayee,
-                          unit: selectedUnit,
+                          category: translatedCat,
+                          category_en: translatedCat,
+                          category_bn: dynamicTranslations[translatedCat] || (isBengali(mainCategory) ? mainCategory : ''),
+                          subcategory: translatedSub,
+                          subcategory_en: translatedSub,
+                          subcategory_bn: dynamicTranslations[translatedSub] || (isBengali(subCategory) ? subCategory : ''),
+                          payee_payer: translatedPayee,
+                          unit: translatedUnit,
                           quantity: parseFloat(quantity),
-                          description: description,
+                          description: translatedDesc,
                           voucher_url: vUrl || voucherPreview,
                           created_by: user?.id,
                           updated_by: user?.id
@@ -2042,6 +2165,7 @@ export default function Dashboard() {
                         }
 
                         fetchInitialData();
+                        alert(t('save_success'));
                         setShowExpenseModal(false);
                         setAmount('');
                         setSelectedProject('');
@@ -2055,7 +2179,7 @@ export default function Dashboard() {
                         setErrors({});
                       }
                     }}
-                    className="w-full py-5 bg-[#E23636] rounded-2xl text-black font-bold uppercase tracking-widest shadow-xl shadow-red-900/40 active:scale-[0.98] transition-all disabled:opacity-50"
+                    className="w-full py-5 bg-[#F43F5E] rounded-2xl text-black font-bold uppercase tracking-widest shadow-xl shadow-red-900/40 active:scale-[0.98] transition-all disabled:opacity-50"
                     disabled={isUploading}
                   >
                     {isUploading ? <Loader2 className="animate-spin mx-auto" /> : t('save')}
@@ -2078,126 +2202,177 @@ export default function Dashboard() {
             placeholder={t('search')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setAppliedSearchQuery(searchQuery);
+            }}
             className="w-full bg-white/5 border border-white/10 rounded-2xl py-3 pl-12 pr-4 focus:outline-none focus:border-blue-500/50 transition-colors"
           />
+          {searchQuery && (
+            <button 
+              onClick={() => setAppliedSearchQuery(searchQuery)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-blue-600 text-white text-[10px] font-bold px-3 py-1.5 rounded-xl uppercase tracking-widest shadow-lg hover:bg-blue-500 active:scale-95 transition-all"
+            >
+              {t('search_button')}
+            </button>
+          )}
         </div>
-        <button className="p-3 bg-white/5 border border-white/10 rounded-2xl text-white/60 hover:text-white transition-colors">
-          <Calendar size={20} />
-        </button>
+        <div 
+          onClick={() => {
+            if (dateInputRef.current) {
+              try {
+                (dateInputRef.current as any).showPicker();
+              } catch (e) {
+                dateInputRef.current.click();
+              }
+            }
+          }}
+          className={`relative flex items-center justify-center w-12 h-12 rounded-2xl border transition-all cursor-pointer ${dashboardDateFilter ? 'bg-blue-600 border-blue-400 text-white shadow-lg shadow-blue-900/40' : 'bg-white/5 border-white/10 text-white/60 hover:text-white'}`}
+        >
+          <Calendar size={20} className="pointer-events-none absolute" />
+          <input 
+            type="date" 
+            ref={dateInputRef}
+            value={dashboardDateFilter}
+            onChange={(e) => {
+              setDashboardDateFilter(e.target.value);
+              setVisibleCount(10); 
+            }}
+            className="opacity-0 w-0 h-0 absolute pointer-events-none"
+            style={{ colorScheme: 'dark' }}
+          />
+        </div>
       </section>
 
       {/* Daily Transactions */}
-      <section className="px-6">
+      <section className="px-6 pb-20">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-medium">{t('daily_tx')}</h2>
-          <span className="text-xs opacity-50 uppercase tracking-widest font-bold">{t('today')}</span>
+          <h2 className="text-sm font-black uppercase tracking-[0.2em] text-white/20">{t('recent_transactions')}</h2>
+          {(appliedSearchQuery || dashboardDateFilter) && (
+            <button 
+              onClick={() => {
+                setSearchQuery('');
+                setAppliedSearchQuery('');
+                setDashboardDateFilter('');
+              }}
+              className="text-[10px] font-bold text-blue-500 uppercase tracking-widest"
+            >
+              {t('clear_filters')}
+            </button>
+          )}
         </div>
-
         
         <div className="space-y-3">
-          {transactions.filter(tx => {
-            const query = searchQuery.toLowerCase();
-            return tx.nature.toLowerCase().includes(query) || 
-                   tx.project.toLowerCase().includes(query) ||
-                   getDisplayName(tx.nature).toLowerCase().includes(query) ||
-                   getDisplayName(tx.project).toLowerCase().includes(query);
-          }).map((tx) => (
-            <div 
-              key={tx.id} 
-              onClick={() => {
-                setSelectedTransaction(tx);
-                setShowTransactionDetails(true);
-              }}
-              className="md3-card-elevated flex items-center p-4 gap-4 cursor-pointer hover:bg-white/5 active:scale-[0.98] transition-all"
-            >
+          {(() => {
+            const filtered = transactions.filter(tx => {
+              // Date Filter
+              if (dashboardDateFilter) {
+                const txDate = new Date(tx.created_at).toISOString().split('T')[0];
+                if (txDate !== dashboardDateFilter) return false;
+              }
 
-              <div className={`w-2 h-12 rounded-full ${tx.type === 'income' ? 'bg-[#00FF41]' : 'bg-[#E23636]'}`} />
-              <div className="flex-1">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <div className="font-medium text-sm">{getDisplayName(tx.nature)}</div>
-                    <div className="text-xs opacity-50">{tx.time}</div>
-                  </div>
-                  <div className={`font-bold ${tx.type === 'income' ? 'text-[#00FF41]' : 'text-[#E23636]'}`}>
-                    {tx.type === 'income' ? '+' : '-'} ৳ {tx.amount.toLocaleString()}
-                  </div>
-                </div>
-                <div className="mt-2">
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full border ${tx.type === 'income' ? 'border-[#00FF41]/30 text-[#00FF41] bg-[#00FF41]/5' : 'border-[#4169E1]/30 text-[#4169E1] bg-[#4169E1]/5'}`}>
-                    {getDisplayName(tx.project)}
-                  </span>
-                </div>
+              // Search Filter
+              if (!appliedSearchQuery) return true;
+              const query = appliedSearchQuery.toLowerCase();
+              return tx.nature.toLowerCase().includes(query) || 
+                     tx.project.toLowerCase().includes(query) ||
+                     getDisplayName(tx.nature).toLowerCase().includes(query) ||
+                     getDisplayName(tx.project).toLowerCase().includes(query);
+            });
+            
+            const sliced = filtered.slice(0, visibleCount);
+            
+            return (
+              <>
+                {sliced.map((tx) => (
+                  <div 
+                    key={tx.id} 
+                    onClick={() => {
+                      setSelectedTransaction(tx);
+                      setShowTransactionDetails(true);
+                    }}
+                    className="md3-card-elevated flex items-center p-4 gap-4 cursor-pointer hover:bg-white/5 active:scale-[0.98] transition-all"
+                  >
 
-              </div>
-            </div>
-          ))}
+                    <div className={`w-2 h-12 rounded-full ${tx.type === 'income' ? 'bg-[#10B981]' : 'bg-[#F43F5E]'}`} />
+                    <div className="flex-1">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-medium text-sm">{getDisplayName(tx.nature)}</div>
+                          <div className="text-xs opacity-50">{tx.time}</div>
+                        </div>
+                        <div className={`font-bold ${tx.type === 'income' ? 'text-[#10B981]' : 'text-[#F43F5E]'}`}>
+                          {tx.type === 'income' ? '+' : '-'} ৳ {tx.amount.toLocaleString('en-US')}
+                        </div>
+                      </div>
+                      <div className="mt-2">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${tx.type === 'income' ? 'border-[#10B981]/30 text-[#10B981] bg-[#10B981]/5' : 'border-[#3B82F6]/30 text-[#3B82F6] bg-[#3B82F6]/5'}`}>
+                          {getDisplayName(tx.project)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                
+                {filtered.length > visibleCount ? (
+                  <button 
+                    onClick={() => setVisibleCount(prev => prev + 10)}
+                    className="w-full py-4 mt-2 bg-white/5 border border-dashed border-white/10 rounded-2xl text-[10px] font-black uppercase tracking-[0.3em] text-white/40 hover:bg-white/10 hover:text-white transition-all"
+                  >
+                    {t('load_more')}
+                  </button>
+                ) : filtered.length === 0 ? (
+                  <div className="text-center py-10 opacity-20 italic">
+                    {lang === 'bn' ? 'কোন তথ্য পাওয়া যায়নি' : 'No transactions found'}
+                  </div>
+                ) : null}
+              </>
+            );
+          })()}
         </div>
       </section>
-        </>
+        </div>
       ) : activeTab === 'reports' ? (
-        <>
-          <header className="px-6 pt-8 pb-4 flex justify-between items-center">
-            <h1 className="text-2xl font-semibold tracking-tight text-white">{t('reports')}</h1>
-            <button 
-              onClick={() => setLang(lang === 'bn' ? 'en' : 'bn')}
-              className="px-3 py-1 rounded-full bg-white/10 text-[10px] font-bold uppercase tracking-widest hover:bg-white/20 transition-colors"
-            >
-              {lang === 'bn' ? 'English' : 'বাংলা'}
-            </button>
-          </header>
+        <div className="pt-4">
+          <div className="px-6 mb-4">
+            <h2 className="text-sm font-black uppercase tracking-[0.2em] text-white/20">{t('reports')}</h2>
+          </div>
           {renderReports()}
-        </>
+        </div>
       ) : activeTab === 'projects' ? (
-        <>
-          <header className="px-6 pt-8 pb-4 flex justify-between items-center">
-            <h1 className="text-2xl font-semibold tracking-tight text-white">{t('projects')}</h1>
-            <div className="flex gap-2">
-              {userRole === 'contractor' && (
-                <button 
-                  onClick={() => setShowProjectModal(true)}
-                  className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-green-400 hover:bg-green-500/10 transition-colors"
-                >
-                  <Plus size={20} />
-                </button>
-              )}
-              <button 
-                onClick={() => setLang(lang === 'bn' ? 'en' : 'bn')}
-                className="px-3 py-1 rounded-full bg-white/10 text-[10px] font-bold uppercase tracking-widest hover:bg-white/20 transition-colors"
-              >
-                {lang === 'bn' ? 'English' : 'বাংলা'}
-              </button>
-            </div>
-          </header>
+        <div className="pt-4">
+          <div className="px-6 mb-4">
+            <h2 className="text-sm font-black uppercase tracking-[0.2em] text-white/20">{t('projects')}</h2>
+          </div>
           {renderProjects()}
-        </>
+        </div>
       ) : activeTab === 'settings' ? (
-        <>
-          <header className="px-6 pt-8 pb-4">
-            <h1 className="text-2xl font-semibold tracking-tight text-white">{t('settings')}</h1>
-          </header>
+        <div className="pt-4">
+          <div className="px-6 mb-4">
+            <h2 className="text-sm font-black uppercase tracking-[0.2em] text-white/20">{t('settings')}</h2>
+          </div>
           
           <div className="px-6 space-y-6">
             <div className="md3-card-elevated p-6 border border-white/5 relative overflow-hidden group">
               <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[40px] -mr-16 -mt-16" />
               
-              <h3 className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] mb-4 relative z-10">Account</h3>
+              <h3 className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] mb-4 relative z-10">{t('account')}</h3>
               <p className="text-sm text-white/60 mb-6 relative z-10 leading-relaxed">
-                You are currently logged in as <strong>Dev Admin</strong>.
+                {t('logged_in_as')} <strong>Dev Admin</strong>.
               </p>
               
               <button 
                 onClick={handleLogout}
                 className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-red-500 font-bold uppercase tracking-widest flex items-center justify-center gap-3 relative z-10"
               >
-                <LogOut size={20} /> {lang === 'bn' ? 'লগ আউট' : 'Sign Out'}
+                <LogOut size={20} /> {t('sign_out')}
               </button>
             </div>
           </div>
-        </>
+        </div>
       ) : null}
 
       {/* Bottom Nav (Mobile Only) */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-[#1A1C1E] lg:hidden flex justify-around py-4 border-t border-white/10 z-50">
+      <nav className="fixed bottom-0 left-0 right-0 bg-[#0F172A] lg:hidden flex justify-around py-4 border-t border-white/10 z-50">
         <button 
           onClick={() => setActiveTab('dashboard')}
           className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'dashboard' ? 'text-blue-400 scale-110' : 'opacity-50 text-white'}`}
@@ -2245,13 +2420,13 @@ export default function Dashboard() {
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed bottom-0 left-0 right-0 bg-[#1A1C1E] rounded-t-[32px] z-[70] max-h-[92vh] overflow-y-auto px-6 pb-10 pt-4 shadow-2xl border-t border-white/10"
+              className="fixed bottom-0 left-0 right-0 bg-[#0F172A] rounded-t-[32px] z-[70] max-h-[92vh] overflow-y-auto px-6 pb-10 pt-4 shadow-2xl border-t border-white/10"
             >
               <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mb-8" />
               
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-[#00FF41]/20 flex items-center justify-center text-[#00FF41]">
+                  <div className="w-10 h-10 rounded-xl bg-[#10B981]/20 flex items-center justify-center text-[#10B981]">
                     <TrendingUp size={20} />
                   </div>
                   {t('add_income')}
@@ -2265,7 +2440,7 @@ export default function Dashboard() {
               <div className="space-y-6">
                 {/* 1. Amount Display */}
                 <div>
-                  <label className="text-[10px] uppercase font-bold tracking-widest text-[#00FF41] mb-2 block">{t('total_income')}</label>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-[#10B981] mb-2 block">{t('total_income')}</label>
                   <div className="relative">
                     <span className="absolute left-0 bottom-2 text-4xl font-bold text-white/20">৳</span>
                     <input 
@@ -2276,7 +2451,7 @@ export default function Dashboard() {
                         setIncomeAmount(e.target.value);
                         if (errors.incomeAmount) setErrors({...errors, incomeAmount: ''});
                       }}
-                      className={`w-full bg-transparent border-b-2 pb-2 pl-10 text-4xl font-bold text-white focus:outline-none focus:border-[#00FF41] transition-colors ${errors.incomeAmount ? 'border-red-500 shadow-[0_4px_10px_rgba(239,68,68,0.4)] animate-pulse' : 'border-white/10'}`}
+                      className={`w-full bg-transparent border-b-2 pb-2 pl-10 text-4xl font-bold text-white focus:outline-none focus:border-[#10B981] transition-colors ${errors.incomeAmount ? 'border-red-500 shadow-[0_4px_10px_rgba(239,68,68,0.4)] animate-pulse' : 'border-white/10'}`}
                       autoFocus
                     />
                   </div>
@@ -2297,7 +2472,7 @@ export default function Dashboard() {
                         }}
                         className={`w-full bg-[#2D2F31] border rounded-2xl py-3 px-4 text-sm text-white appearance-none ${errors.project ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-white/10'}`}
                       >
-                        <option value="">{t('project')}</option>
+                        <option value="">{t('select_project')}</option>
                         {dbProjects.filter(p => p.status === 'running').map((p) => (
                           <option key={p.id} value={p.name}>{getDisplayName(p.name)}</option>
                         ))}
@@ -2335,7 +2510,7 @@ export default function Dashboard() {
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-2">
                     <input 
                       type="text" 
-                      placeholder={lang === 'bn' ? 'দাতার নাম লিখুন...' : 'Enter payer name...'}
+                      placeholder={t('enter_new_name')}
                       value={customPayer}
                       onChange={(e) => setCustomPayer(e.target.value)}
                       className="flex-1 bg-white/5 border border-red-500/30 rounded-xl py-2 px-4 text-sm"
@@ -2531,17 +2706,30 @@ export default function Dashboard() {
 
                         const project = dbProjects.find(p => p.name === selectedProject);
                         
+                        // Bilingual translation before saving
+                        const translatedNature = await ensureBilingual(incomeSubCategory || incomeCategory || 'Income');
+                        const translatedCat = await ensureBilingual(incomeCategory);
+                        const translatedSub = await ensureBilingual(incomeSubCategory);
+                        const translatedPayer = await ensureBilingual(selectedPayer);
+                        const translatedDesc = await ensureBilingual(description);
+
                         const txData = {
                           project_id: project?.id,
                           type: 'income',
-                          nature: incomeSubCategory || incomeCategory || 'Income',
+                          nature: translatedNature,
+                          nature_en: translatedNature,
+                          nature_bn: dynamicTranslations[translatedNature] || (isBengali(incomeSubCategory || incomeCategory) ? (incomeSubCategory || incomeCategory) : ''),
                           amount: parseFloat(incomeAmount),
-                          category: incomeCategory,
-                          subcategory: incomeSubCategory,
-                          payee_payer: selectedPayer,
+                          category: translatedCat,
+                          category_en: translatedCat,
+                          category_bn: dynamicTranslations[translatedCat] || (isBengali(incomeCategory) ? incomeCategory : ''),
+                          subcategory: translatedSub,
+                          subcategory_en: translatedSub,
+                          subcategory_bn: dynamicTranslations[translatedSub] || (isBengali(incomeSubCategory) ? incomeSubCategory : ''),
+                          payee_payer: translatedPayer,
                           payment_method: paymentMethod,
                           ref_no: refNo,
-                          description: description,
+                          description: translatedDesc,
                           voucher_url: vUrl || voucherPreview,
                           created_by: user?.id,
                           updated_by: user?.id
@@ -2601,7 +2789,7 @@ export default function Dashboard() {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="fixed inset-x-6 top-20 bg-[#1A1C1E] border border-white/10 rounded-[32px] p-8 z-[90] shadow-2xl"
+              className="fixed inset-x-6 top-20 bg-[#0F172A] border border-white/10 rounded-[32px] p-8 z-[90] shadow-2xl"
             >
               <div className="flex justify-between items-center mb-8">
                 <h2 className="text-xl font-bold text-white flex items-center gap-3">
@@ -2617,28 +2805,31 @@ export default function Dashboard() {
 
               <div className="space-y-6">
                 <div>
-                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">Site Manager Email</label>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">{t('manager_email')}</label>
                   <input 
                     type="email"
                     placeholder="manager@email.com"
                     value={inviteEmail}
                     onChange={(e) => setInviteEmail(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-4 text-white focus:outline-none focus:border-blue-600 transition-all"
+                    className="w-full bg-[#2D2F31] border border-white/10 rounded-2xl py-4 px-4 text-white focus:outline-none focus:border-blue-600 transition-all"
                   />
                 </div>
 
                 <div>
-                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">Assign to Project</label>
-                  <select 
-                    value={inviteProject}
-                    onChange={(e) => setInviteProject(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-4 text-white focus:outline-none focus:border-blue-600 appearance-none"
-                  >
-                    <option value="">Select Project</option>
-                    {dbProjects.map(p => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">{t('assign_to_project')}</label>
+                  <div className="relative">
+                    <select 
+                      value={inviteProject}
+                      onChange={(e) => setInviteProject(e.target.value)}
+                      className="w-full bg-[#2D2F31] border border-white/10 rounded-2xl py-4 px-4 text-white focus:outline-none focus:border-blue-600 appearance-none"
+                    >
+                      <option value="" className="bg-[#0F172A]">{t('select_project_option')}</option>
+                      {dbProjects.map(p => (
+                        <option key={p.id} value={p.id} className="bg-[#0F172A]">{getDisplayName(p.name)}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30 pointer-events-none" size={18} />
+                  </div>
                 </div>
 
                 <button 
@@ -2669,7 +2860,7 @@ export default function Dashboard() {
                         if (memberError.code === '23505') alert('This user is already a manager for this project.');
                         else alert(memberError.message);
                       } else {
-                        alert('Site Manager assigned successfully!');
+                        alert(t('manager_assigned'));
                         setInviteEmail('');
                         fetchTeamData(inviteProject);
                       }
@@ -2688,7 +2879,7 @@ export default function Dashboard() {
                         if (inviteError.code === '23505') alert('An invitation is already pending for this email.');
                         else alert(inviteError.message);
                       } else {
-                        alert('Invitation sent!');
+                        alert(t('invitation_sent'));
                         setInviteEmail('');
                         fetchTeamData(inviteProject);
                       }
@@ -2698,12 +2889,12 @@ export default function Dashboard() {
                   disabled={isInviting}
                   className="w-full bg-blue-600 py-5 rounded-2xl text-white font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-50"
                 >
-                  {isInviting ? <Loader2 className="animate-spin" size={24} /> : 'Assign Site Manager'}
+                  {isInviting ? <Loader2 className="animate-spin" size={24} /> : t('assign_manager')}
                 </button>
 
                 {/* Team List */}
                 <div className="pt-6 border-t border-white/10 mt-6">
-                  <h3 className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-4 px-1">{lang === 'bn' ? 'বর্তমান টিম' : 'Current Team'}</h3>
+                  <h3 className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-4 px-1">{t('current_team')}</h3>
                   
                   {isTeamLoading ? (
                     <div className="py-8 flex justify-center"><Loader2 className="animate-spin text-white/20" /></div>
@@ -2727,7 +2918,7 @@ export default function Dashboard() {
                         <div key={inv.id} className="bg-white/5 border border-dashed border-white/10 rounded-2xl p-4 flex justify-between items-center group">
                           <div>
                             <p className="text-xs font-bold text-white/60">{inv.email}</p>
-                            <p className="text-[8px] uppercase tracking-widest text-blue-400 font-bold">Pending Invite</p>
+                            <p className="text-[8px] uppercase tracking-widest text-blue-400 font-bold">{t('pending_invite')}</p>
                           </div>
                           <button 
                             onClick={() => handleCancelInvite(inv.id)}
@@ -2738,7 +2929,7 @@ export default function Dashboard() {
                         </div>
                       ))}
                       {projectMembers.length === 0 && projectInvitations.length === 0 && (
-                        <div className="text-center py-8 text-white/20 text-[10px] uppercase font-bold tracking-widest">No members assigned</div>
+                        <div className="text-center py-8 text-white/20 text-[10px] uppercase font-bold tracking-widest">{t('no_members')}</div>
                       )}
                     </div>
                   )}
@@ -2763,7 +2954,7 @@ export default function Dashboard() {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="fixed inset-x-6 top-40 bg-[#1A1C1E] border border-white/10 rounded-[32px] p-8 z-[90] shadow-2xl"
+              className="fixed inset-x-6 top-40 bg-[#0F172A] border border-white/10 rounded-[32px] p-8 z-[90] shadow-2xl"
             >
               <div className="flex justify-between items-center mb-8">
                 <h2 className="text-xl font-bold text-white flex items-center gap-3">
@@ -2786,7 +2977,7 @@ export default function Dashboard() {
 
               <div className="space-y-6">
                 <div>
-                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">Project Name (Bilingual supported)</label>
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block px-1">{t('project_name_bilingual')}</label>
                   <input 
                     type="text"
                     placeholder="e.g. Padma Bridge / পদ্মা সেতু"
@@ -2801,16 +2992,22 @@ export default function Dashboard() {
                     if (!newProjectName.trim() || !user) return;
                     setIsCreatingProject(true);
                     
+                    const canonicalName = await ensureBilingual(newProjectName.trim());
+
                     if (isEditProjectMode && editingProjectId) {
                       const { error } = await supabase
                         .from('projects')
-                        .update({ name: newProjectName.trim() })
+                        .update({ 
+                          name: canonicalName,
+                          name_en: canonicalName,
+                          name_bn: dynamicTranslations[canonicalName] || (isBengali(newProjectName) ? newProjectName : '')
+                        })
                         .eq('id', editingProjectId);
 
                       if (error) {
                         alert(error.message);
                       } else {
-                        alert('Project updated successfully!');
+                        alert(t('project_update_success'));
                         setShowProjectModal(false);
                         setIsEditProjectMode(false);
                         setNewProjectName('');
@@ -2820,7 +3017,9 @@ export default function Dashboard() {
                       const { error } = await supabase
                         .from('projects')
                         .insert({
-                          name: newProjectName.trim(),
+                          name: canonicalName,
+                          name_en: canonicalName,
+                          name_bn: dynamicTranslations[canonicalName] || (isBengali(newProjectName) ? newProjectName : ''),
                           owner_id: user.id,
                           status: 'running'
                         });
@@ -2828,7 +3027,7 @@ export default function Dashboard() {
                       if (error) {
                         alert(error.message);
                       } else {
-                        alert('Project created successfully!');
+                        alert(t('project_success'));
                         setShowProjectModal(false);
                         setNewProjectName('');
                         fetchInitialData();
@@ -2837,7 +3036,7 @@ export default function Dashboard() {
                     setIsCreatingProject(false);
                   }}
                   disabled={isCreatingProject}
-                  className="w-full bg-[#00FF41] py-5 rounded-2xl text-black font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-50"
+                  className="w-full bg-[#10B981] py-5 rounded-2xl text-black font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-50"
                 >
                   {isCreatingProject ? <Loader2 className="animate-spin" size={24} /> : (isEditProjectMode ? (lang === 'bn' ? 'আপডেট করুন' : 'Update Project') : (lang === 'bn' ? 'তৈরি করুন' : 'Create Project'))}
                 </button>
@@ -2847,7 +3046,7 @@ export default function Dashboard() {
                     onClick={() => handleDeleteProject(editingProjectId!)}
                     className="w-full py-4 text-red-500/60 hover:text-red-500 text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 mt-4"
                   >
-                    <Trash2 size={14} /> {lang === 'bn' ? 'প্রজেক্ট ডিলিট করুন' : 'Delete Project'}
+                    <Trash2 size={14} /> {t('delete_project')}
                   </button>
                 )}
               </div>
@@ -2871,16 +3070,16 @@ export default function Dashboard() {
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed bottom-0 left-0 right-0 bg-[#1A1C1E] rounded-t-[32px] z-[90] max-h-[92vh] overflow-y-auto px-6 pb-12 pt-4 shadow-2xl border-t border-white/10"
+              className="fixed bottom-0 left-0 right-0 bg-[#0F172A] rounded-t-[32px] z-[90] max-h-[92vh] overflow-y-auto px-6 pb-12 pt-4 shadow-2xl border-t border-white/10"
             >
               <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mb-8" />
               
               <div className="flex justify-between items-center mb-8">
                 <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${selectedTransaction.type === 'income' ? 'bg-[#00FF41]/20 text-[#00FF41]' : 'bg-[#E23636]/20 text-[#E23636]'}`}>
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${selectedTransaction.type === 'income' ? 'bg-[#10B981]/20 text-[#10B981]' : 'bg-[#F43F5E]/20 text-[#F43F5E]'}`}>
                     {selectedTransaction.type === 'income' ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
                   </div>
-                  {t('tx_details')}
+                  {t('transaction_details')}
                 </h2>
                 <button onClick={() => setShowTransactionDetails(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/40">
                   <X size={20} />
@@ -2890,8 +3089,8 @@ export default function Dashboard() {
               <div className="space-y-8">
                 {/* 1. Big Amount */}
                 <div className="text-center py-4">
-                  <div className={`text-4xl font-black mb-1 ${selectedTransaction.type === 'income' ? 'text-[#00FF41]' : 'text-[#E23636]'}`}>
-                    {selectedTransaction.type === 'income' ? '+' : '-'} ৳ {selectedTransaction.amount.toLocaleString()}
+                  <div className={`text-4xl font-black mb-1 ${selectedTransaction.type === 'income' ? 'text-[#10B981]' : 'text-[#F43F5E]'}`}>
+                    {selectedTransaction.type === 'income' ? '+' : '-'} ৳ {selectedTransaction.amount.toLocaleString('en-US')}
                   </div>
                   <div className="text-xs opacity-40 font-bold uppercase tracking-[0.2em]">{getDisplayName(selectedTransaction.nature)}</div>
                 </div>
@@ -2931,7 +3130,7 @@ export default function Dashboard() {
                     <>
                       <div>
                         <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{t('method')}</label>
-                        <div className="text-sm font-bold text-white">{getDisplayName(selectedTransaction.payment_method) || 'Cash'}</div>
+                        <div className="text-sm font-bold text-white">{getDisplayName(selectedTransaction.payment_method) || t('cash')}</div>
                       </div>
                       <div>
                         <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-1 block">{t('ref')}</label>
@@ -2956,7 +3155,7 @@ export default function Dashboard() {
                   <div className="px-2">
                     <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-2 block">{t('note')}</label>
                     <div className="text-sm text-white/80 bg-white/5 border border-white/10 rounded-2xl p-4 italic leading-relaxed">
-                      "{selectedTransaction.description}"
+                      "{getDisplayName(selectedTransaction.description)}"
                     </div>
                   </div>
                 )}
@@ -3075,7 +3274,7 @@ export default function Dashboard() {
                 <span className="text-5xl font-black" style={{ 
                   color: selectedTransaction.type === 'income' ? '#16A34A' : '#DC2626' 
                 }}>
-                  ৳ {selectedTransaction.amount.toLocaleString()}
+                  ৳ {selectedTransaction.amount.toLocaleString('en-US')}
                 </span>
               </div>
 

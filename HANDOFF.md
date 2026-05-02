@@ -1,38 +1,41 @@
 # Project Handoff: ContractorsBD 🏗️
 
-## 🎨 Design System (Vibrant Field Mode)
-The application uses a high-vibrancy design system optimized for outdoor visibility:
-- **Income:** Matrix Green (`#00FF41`) with **Black Text**.
-- **Expense:** Spiderman Red (`#E23636`) with **White Text**.
-- **Profit/Loss:** Royal Blue (`#4169E1`) with **White Text**.
+## 🎨 Design System (Investment Banking Mode)
+The application has transitioned to a premium, high-density **Investment Banking** aesthetic:
+- **Primary Palette:** Midnight Navy (`#0F172A`) base with Sapphire Blue (`#2563EB`) accents.
+- **Surface Elevation:** Subtle glassmorphism and card elevations for a professional, enterprise feel.
+- **Status Indicators:** 
+    - **Income:** Matrix Green (`#10B981`)
+    - **Expense:** Spiderman Red (`#F43F5E`)
+    - **Project Margin:** Sapphire Blue (`#2563EB`)
 
 ## 🛠️ Module Status
 - **Operational Hub (Projects):** ✅ Complete. 
-    - **Lifecycle**: Full transitions (Running, Completed, Archived).
-    - **CRUD**: Rename and Delete projects (with confirmation).
-    - **Density**: 2-column grid layout enforced for all screen sizes.
+    - **Density**: 2-column grid layout with high-visibility project headers.
+    - **Bilingual**: Project names automatically sync between languages via MyMemory API.
 - **Team Management:** ✅ Complete.
-    - Active Site Manager list with **Remove** functionality.
-    - Pending Invitation tracking and **Cancel** functionality.
+    - **Localization**: Modal and lists are fully bilingual.
+    - **UX**: Refined input styles with dark backgrounds for better readability in the "Midnight" theme.
 - **Financial Hub (Reports):** ✅ Complete. 
     - **Analytics**: Donut (Breakdown) and Area (Cash Flow) charts.
-    - **Ledger**: Date-grouped entries with project-specific filtering.
-- **Audit Logs:** ✅ Complete. Tracks `created_by` and `updated_by` for all transactions.
-- **PDF & Exports:** ✅ Complete. Professional voucher generation (A4) with image embedding.
-- **Auth & RBAC:** ✅ Stable (Development Bypass Active).
-    - **New**: Dev ID updated to `f50c7397...` to match seeded project ownership for RLS testing.
+    - **Consistency**: English numerics enforced globally for financial precision.
+- **Transaction Ledger:** ✅ Complete.
+    - **Manual Search**: Explicit trigger requirement (Search button/Enter) for professional reliability.
+    - **Pagination**: 10-item high-density list with "Load More" capability.
+    - **Date Filtering**: Fixed Calendar interaction logic.
 
 ## 🚀 Immediate Next Steps
 1.  **Auth Restoration:** Re-enable Email OTP and remove guest bypass in `page.tsx`.
-2.  **User Onboarding:** Verify Site Manager project-access logic with real user accounts.
-3.  **Performance Polish:** Monitor heavy chart rendering on lower-end mobile devices.
+2.  **User Verification:** Conduct end-to-end testing with real Site Manager accounts to verify project-access restrictions.
+3.  **Production Readiness:** Perform a final audit of RLS policies to ensure total data isolation.
 
 ## ⚠️ Technical Notes
-- **Grid Layout:** Enforced `grid-cols-2` on all screens; ensure project names are kept reasonably short for best appearance.
-- **Cascading Deletes:** Project deletion is handled by Supabase (ON DELETE CASCADE) to clean up related transactions.
+- **Localization Engine**: Uses a centralized `t()` helper for static strings and `getDisplayName()` for dynamic database-linked content.
+- **Numeric Formatting**: Strictly `en-US` locale enforced for all currency and date displays to prevent layout shifting and ensure clarity.
+- **Bilingual Sync**: Background workers automatically ensure parity for Payees, Categories, and Projects.
 
 ---
-*Last Session Summary: 2026-04-30*
-- **Operational Completeness**: Implemented Archiving, Project CRUD, and Team Management.
-- **Audit Trail**: Enabled transaction-level owner tracking.
-- **UI Finalization**: achieved ultra-dense 2-column project grid.
+*Last Session Summary: 2026-05-02*
+- **Aesthetic Shift**: Implemented Investment Banking theme.
+- **Global Bilingualism**: Standardized all UI elements (Static + Dynamic) for English/Bengali.
+- **Interaction Refinement**: Implemented manual search and 10-item pagination.
