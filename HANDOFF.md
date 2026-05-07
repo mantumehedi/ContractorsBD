@@ -28,17 +28,20 @@ The application has transitioned to a premium, high-density **Investment Banking
 - **Transaction Ledger:** ✅ Complete.
     - **Manual Search**: Explicit trigger requirement for professional reliability.
     - **Pagination**: 10-item high-density list.
+- **Auth Bypass**: ✅ Complete.
+    - **Logic**: OTP-less login with auto-signup via fixed dev password.
 
 ## 🚀 Immediate Next Steps
-1.  **Verification**: Final browser test of the desktop sidebar transition to mobile bottom nav.
-2.  **Production Readiness**: Perform a final audit of RLS policies to ensure total data isolation.
+1.  **Production Readiness**: Perform a final audit of RLS policies to ensure total data isolation.
 
 ## ⚠️ Technical Notes
 - **Desktop Navigation**: Sidebar is implemented in `page.tsx` with `lg:flex` and fixed positioning. The main content is wrapped in a scrollable `flex-1` container.
 - **Localization Engine**: Uses `t()` for static strings and `getDisplayName()` for dynamic content.
 - **Numeric Formatting**: Strictly `en-US` locale enforced for all currency and dates.
+- **Auth Bypass Note**: Requires disabling "Confirm Email" in Supabase Auth settings to work without verification emails.
 
 ---
 *Last Session Summary: 2026-05-03*
 - **Desktop Sidebar**: Implemented professional sidebar for desktop view, resolving the "missing navigation" issue.
 - **Protocols Updated**: Enforced `cyberkid.mm@gmail.com` login and auto-documentation updates.
+- **Git Status**: Changes committed locally; pending push to origin.

@@ -44,8 +44,6 @@ const TRANSLATIONS = {
 export default function LoginPage() {
   const [lang, setLang] = useState<'en' | 'bn'>('bn');
   const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState('');
-  const [step, setStep] = useState<'email' | 'otp'>('email');
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   
@@ -65,46 +63,42 @@ export default function LoginPage() {
     localStorage.setItem('preferred_lang', newLang);
   };
 
-  const handleSendOtp = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setMessage(null);
 
-    const { error } = await supabase.auth.signInWithOtp({
+    const devPassword = 'ContractorsBD_Dev_2026';
+
+    // 1. Try to sign in
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
       email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
+      password: devPassword,
     });
 
-    if (error) {
-      setMessage({ type: 'error', text: error.message });
+    if (signInError) {
+      // 2. If sign in fails, try to sign up (auto-signup)
+      if (signInError.message.includes('Invalid login credentials') || signInError.message.includes('User not found')) {
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password: devPassword,
+        });
+
+        if (signUpError) {
+          setMessage({ type: 'error', text: signUpError.message });
+          setIsLoading(false);
+        } else {
+          setMessage({ type: 'success', text: t('success_redirect') });
+          setTimeout(() => router.push('/'), 1500);
+        }
+      } else {
+        setMessage({ type: 'error', text: signInError.message });
+        setIsLoading(false);
+      }
     } else {
-      setStep('otp');
-      setMessage({ type: 'success', text: t('otp_sent') });
-    }
-    setIsLoading(false);
-  };
-
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setMessage(null);
-
-    const { error } = await supabase.auth.verifyOtp({
-      email,
-      token: otp,
-      type: 'email',
-    });
-
-    if (error) {
-      setMessage({ type: 'error', text: error.message });
-      setIsLoading(false);
-    } else {
+      // Success
       setMessage({ type: 'success', text: t('success_redirect') });
-      setTimeout(() => {
-        router.push('/');
-      }, 1500);
+      setTimeout(() => router.push('/'), 1500);
     }
   };
 
@@ -149,7 +143,7 @@ export default function LoginPage() {
             {t('title')}<span className="text-blue-500">BD</span>
           </h1>
           <p className="text-white/40 text-[10px] font-bold uppercase tracking-[0.2em]">
-            {step === 'email' ? t('subtitle_email') : t('subtitle_otp')}
+            {t('subtitle_email')}
           </p>
         </div>
 
@@ -171,71 +165,38 @@ export default function LoginPage() {
             )}
           </AnimatePresence>
 
-          <form onSubmit={step === 'email' ? handleSendOtp : handleVerifyOtp} className="space-y-6">
+          <form onSubmit={handleLogin} className="space-y-6">
             
-            {step === 'email' ? (
-              <motion.div 
-                key="email-step"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-              >
-                <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-3 block px-1">{t('label_email')}</label>
-                <div className="relative">
-                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={20} />
-                  <input 
-                    type="email"
-                    required
-                    placeholder={t('placeholder_email')}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-12 pr-4 text-white focus:outline-none focus:border-blue-500 transition-all text-lg font-medium"
-                  />
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div 
-                key="otp-step"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-              >
-                <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-3 block px-1">{t('label_otp')}</label>
-                <div className="relative">
-                  <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={20} />
-                  <input 
-                    type="text"
-                    required
-                    placeholder={t('placeholder_otp')}
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-12 pr-4 text-white focus:outline-none focus:border-blue-500 transition-all tracking-[0.5em] font-mono text-center text-2xl"
-                  />
-                </div>
-                <button 
-                  type="button"
-                  onClick={() => setStep('email')}
-                  className="mt-4 text-[10px] uppercase font-bold text-white/30 hover:text-white/60 transition-colors"
-                >
-                  {t('change_email')}
-                </button>
-              </motion.div>
-            )}
+            <motion.div 
+              key="email-step"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+            >
+              <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-3 block px-1">{t('label_email')}</label>
+              <div className="relative">
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={20} />
+                <input 
+                  type="email"
+                  required
+                  placeholder={t('placeholder_email')}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-12 pr-4 text-white focus:outline-none focus:border-blue-500 transition-all text-lg font-medium"
+                />
+              </div>
+            </motion.div>
 
             <button 
               type="submit"
               disabled={isLoading}
-              className={`w-full py-5 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 transition-all active:scale-[0.98] shadow-xl ${
-                step === 'email' 
-                  ? 'bg-blue-600 text-white shadow-blue-900/40' 
-                  : 'bg-emerald-600 text-white shadow-emerald-900/40'
-              }`}
+              className="w-full py-5 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 transition-all active:scale-[0.98] shadow-xl bg-blue-600 text-white shadow-blue-900/40 hover:bg-blue-500"
             >
               {isLoading ? (
                 <Loader2 className="animate-spin" size={24} />
               ) : (
                 <>
-                  {step === 'email' ? t('btn_send_otp') : t('btn_verify')}
+                  {t('btn_verify')}
                   <ArrowRight size={20} />
                 </>
               )}
