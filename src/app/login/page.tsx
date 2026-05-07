@@ -44,6 +44,8 @@ const TRANSLATIONS = {
 export default function LoginPage() {
   const [lang, setLang] = useState<'en' | 'bn'>('bn');
   const [email, setEmail] = useState('');
+  const [otp, setOtp] = useState('');
+  const [step, setStep] = useState<'login' | 'otp'>('login');
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   
@@ -85,7 +87,16 @@ export default function LoginPage() {
         });
 
         if (signUpError) {
-          setMessage({ type: 'error', text: signUpError.message });
+          if (signUpError.message.includes('User already registered')) {
+            setMessage({ 
+              type: 'error', 
+              text: lang === 'bn' 
+                ? 'এই ইমেইলটি আগে থেকেই রেজিস্টার করা। পাসওয়ার্ড সেট করতে "OTP ব্যবহার করুন" লিংকে ক্লিক করুন অথবা নতুন ইমেইল ব্যবহার করুন।' 
+                : 'Email already registered without a password. Use the "Use OTP" link below or try a new email.' 
+            });
+          } else {
+            setMessage({ type: 'error', text: signUpError.message });
+          }
           setIsLoading(false);
         } else {
           setMessage({ type: 'success', text: t('success_redirect') });
@@ -97,6 +108,40 @@ export default function LoginPage() {
       }
     } else {
       // Success
+      setMessage({ type: 'success', text: t('success_redirect') });
+      setTimeout(() => router.push('/'), 1500);
+    }
+  };
+
+  const handleSendOtp = async () => {
+    setIsLoading(true);
+    setMessage(null);
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: `${window.location.origin}/auth/callback` }
+    });
+    if (error) {
+      setMessage({ type: 'error', text: error.message });
+    } else {
+      setStep('otp');
+      setMessage({ type: 'success', text: t('otp_sent') });
+    }
+    setIsLoading(false);
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setMessage(null);
+    const { error } = await supabase.auth.verifyOtp({
+      email,
+      token: otp,
+      type: 'email',
+    });
+    if (error) {
+      setMessage({ type: 'error', text: error.message });
+      setIsLoading(false);
+    } else {
       setMessage({ type: 'success', text: t('success_redirect') });
       setTimeout(() => router.push('/'), 1500);
     }
@@ -165,27 +210,65 @@ export default function LoginPage() {
             )}
           </AnimatePresence>
 
-          <form onSubmit={handleLogin} className="space-y-6">
+          <form onSubmit={step === 'login' ? handleLogin : handleVerifyOtp} className="space-y-6">
             
-            <motion.div 
-              key="email-step"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-            >
-              <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-3 block px-1">{t('label_email')}</label>
-              <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={20} />
-                <input 
-                  type="email"
-                  required
-                  placeholder={t('placeholder_email')}
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-12 pr-4 text-white focus:outline-none focus:border-blue-500 transition-all text-lg font-medium"
-                />
-              </div>
-            </motion.div>
+            <AnimatePresence mode="wait">
+              {step === 'login' ? (
+                <motion.div 
+                  key="email-step"
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                >
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-3 block px-1">{t('label_email')}</label>
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={20} />
+                    <input 
+                      type="email"
+                      required
+                      placeholder={t('placeholder_email')}
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-12 pr-4 text-white focus:outline-none focus:border-blue-500 transition-all text-lg font-medium"
+                    />
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={handleSendOtp}
+                    className="mt-4 text-[10px] uppercase font-bold text-blue-400/60 hover:text-blue-400 transition-colors block ml-auto"
+                  >
+                    {lang === 'bn' ? 'OTP ব্যবহার করুন (পুরাতন অ্যাকাউন্ট)' : 'Use OTP instead (Existing Account)'}
+                  </button>
+                </motion.div>
+              ) : (
+                <motion.div 
+                  key="otp-step"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                >
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-white/40 mb-3 block px-1">{t('label_otp')}</label>
+                  <div className="relative">
+                    <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={20} />
+                    <input 
+                      type="text"
+                      required
+                      placeholder={t('placeholder_otp')}
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-12 pr-4 text-white focus:outline-none focus:border-blue-500 transition-all tracking-[0.5em] font-mono text-center text-2xl"
+                    />
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setStep('login')}
+                    className="mt-4 text-[10px] uppercase font-bold text-white/30 hover:text-white/60 transition-colors"
+                  >
+                    {t('change_email')}
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <button 
               type="submit"
@@ -196,7 +279,7 @@ export default function LoginPage() {
                 <Loader2 className="animate-spin" size={24} />
               ) : (
                 <>
-                  {t('btn_verify')}
+                  {step === 'login' ? t('btn_verify') : t('btn_verify')}
                   <ArrowRight size={20} />
                 </>
               )}
